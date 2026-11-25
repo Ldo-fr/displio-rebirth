@@ -194,13 +194,7 @@ static uint8_t epd_encode_odd(uint8_t b, uint8_t stage) {
                      ((r & 0x30u) >> 2) | ((r & 0xC0u) >> 6));
 }
 
-static uint8_t rev8(uint8_t b) {
-    b = (uint8_t)(((b & 0xF0u) >> 4) | ((b & 0x0Fu) << 4));
-    b = (uint8_t)(((b & 0xCCu) >> 2) | ((b & 0x33u) << 2));
-    return (uint8_t)(((b & 0xAAu) >> 1) | ((b & 0x55u) << 1));
-}
-
-/* Match Displio G2 COG scan order, oriented right-side-up (y=0 top, x=0 left) */
+/* Match Displio G2 COG scan order, oriented right-side-up (y=0 top, x=0 left, MSB-first) */
 static void epd_frame_stage(const uint8_t *fb, uint8_t stage, uint32_t stage_ms) {
     uint8_t even[33], odd[33];
     uint32_t t0 = g_ms;
@@ -208,8 +202,8 @@ static void epd_frame_stage(const uint8_t *fb, uint8_t stage, uint32_t stage_ms)
         for (uint8_t y = 0; y < EPD_HEIGHT; y++) {
             const uint8_t *row = fb + (uint32_t)y * 33u;
             for (int x = 0; x < 33; x++) {
-                even[x] = epd_encode_even(rev8(row[x]), stage);
-                odd[x]  = epd_encode_odd(rev8(row[32 - x]), stage);
+                even[x] = epd_encode_even(row[x], stage);
+                odd[x]  = epd_encode_odd(row[32 - x], stage);
             }
             epd_send_line(y, even, odd, 0x00);
         }
