@@ -309,11 +309,11 @@ int cc3000_init(void) {
 int cc3000_set_ip(const uint8_t ip[4], const uint8_t mask[4], const uint8_t gw[4]) {
     uint8_t args[16];
     if (ip && ip[0] != 0u) {
-        /* Static IP: CC3000 OP_NETAPP_DHCP takes reversed byte order (ip[3]..ip[0]) */
-        args[0]  = ip[3];   args[1]  = ip[2];   args[2]  = ip[1];   args[3]  = ip[0];
-        args[4]  = mask[3]; args[5]  = mask[2]; args[6]  = mask[1]; args[7]  = mask[0];
-        args[8]  = gw[3];   args[9]  = gw[2];   args[10] = gw[1];   args[11] = gw[0];
-        args[12] = gw[3];   args[13] = gw[2];   args[14] = gw[1];   args[15] = gw[0]; /* DNS = gw */
+        /* Static IP: CC3000 OP_NETAPP_DHCP takes network byte order (ip[0]..ip[3]) */
+        args[0]  = ip[0];   args[1]  = ip[1];   args[2]  = ip[2];   args[3]  = ip[3];
+        args[4]  = mask[0]; args[5]  = mask[1]; args[6]  = mask[2]; args[7]  = mask[3];
+        args[8]  = gw[0];   args[9]  = gw[1];   args[10] = gw[2];   args[11] = gw[3];
+        args[12] = gw[0];   args[13] = gw[1];   args[14] = gw[2];   args[15] = gw[3]; /* DNS = gw */
     } else {
         for (int i = 0; i < 16; i++) args[i] = 0u; /* DHCP */
     }
