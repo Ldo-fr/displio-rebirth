@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install ARM GCC toolchain
         run: |
@@ -32,7 +32,7 @@ jobs:
         run: python3 -m py_compile tools/displio_tool.py tools/displio_app.py
 
       - name: Upload firmware binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: displio-fw
           path: |
