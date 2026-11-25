@@ -1,5 +1,10 @@
 # displio-rebirth
 
+[![Version](https://img.shields.io/github/v/release/Ldo-fr/displio-rebirth?include_prereleases&color=yellow&label=firmware)](https://github.com/Ldo-fr/displio-rebirth/releases)
+[![Build](https://github.com/Ldo-fr/displio-rebirth/actions/workflows/build.yml/badge.svg)](https://github.com/Ldo-fr/displio-rebirth/actions/workflows/build.yml)
+[![Home Assistant HACS](https://img.shields.io/badge/Home%20Assistant-displio--rebirth--ha-41BDF5.svg)](https://github.com/Ldo-fr/displio-rebirth-ha)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Give a second life to the **Displio V1.0** Wi-Fi E-Ink desk display (Draugiem Group, 2015) whose original cloud service has been shut down — replace its proprietary firmware with a 100% open-source, self-hosted, local-first firmware, flashed entirely over USB with **no soldering, no disassembly, and no ST-Link**.
 
 > [!NOTE]
@@ -25,7 +30,7 @@ Original Kickstarter campaign: https://www.kickstarter.com/projects/914874115/di
   - `POST /display[?full=1]` — push a 5,808-byte monochrome image to the E-Ink screen
   - `POST /beep[?freq=&ms=]` — trigger the piezo buzzer
   - `GET /` — healthcheck
-- **Home Assistant ready**: designed to pair with the companion HACS integration (`displio-rebirth-ha`).
+- **Home Assistant ready**: pairs directly with the companion HACS integration — **[Ldo-fr/displio-rebirth-ha](https://github.com/Ldo-fr/displio-rebirth-ha)**.
 
 ---
 
@@ -35,9 +40,9 @@ Original Kickstarter campaign: https://www.kickstarter.com/projects/914874115/di
 - [x] **Phase 2**: Hardware discovery (`STM32F103xB`, 72 MHz, 128 KiB Flash, 20 KiB RAM) & flasher tool — [docs/hardware.md](docs/hardware.md)
 - [x] **Phase 3**: Custom bare-metal STM32 firmware (USB HID `DISPLIO REBIRTH`, 2.7" E-Ink, piezo buzzer, hands-free bootloader re-entry)
 - [x] **Phase 4**: Full peripheral drivers (`MMA8452Q`, `Si7021`, Battery ADC, TI `CC3000` Wi-Fi)
-- [x] **Phase 5**: TI `CC3000` Wi-Fi STA driver, persistent Flash config, and local HTTP REST API — [docs/api.md](docs/api.md)
+- [x] **Phase 5**: TI `CC3000` Wi-Fi STA driver, persistent Flash config (DHCP & static IP), E-Ink boot/Wi-Fi UI, and local HTTP REST API — [docs/api.md](docs/api.md)
 - [x] **Phase 6**: Public release, CI firmware builds, and automated Releases
-- [ ] **Phase 7**: Companion Home Assistant HACS integration (`displio-rebirth-ha`, separate repository)
+- [x] **Phase 7**: Companion Home Assistant HACS integration — **[Ldo-fr/displio-rebirth-ha](https://github.com/Ldo-fr/displio-rebirth-ha)**
 
 ---
 
@@ -162,6 +167,10 @@ python3 -c 'import urllib.request; urllib.request.urlopen(urllib.request.Request
 ```
 
 See [docs/api.md](docs/api.md) for the complete HTTP API specification.
+
+### 7. Connect to Home Assistant (Optional)
+
+Once your Displio is online on Wi-Fi, install the companion HACS integration **[Ldo-fr/displio-rebirth-ha](https://github.com/Ldo-fr/displio-rebirth-ha)** to expose all onboard sensors and push custom text/images/beeps from Home Assistant automations.
 
 ---
 

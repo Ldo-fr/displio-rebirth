@@ -1,6 +1,6 @@
 # Displio Rebirth — HTTP REST API (`v1.0`)
 
-This document defines the stable local HTTP API exposed by the Displio custom firmware over its **TI CC3000** Wi-Fi interface (default TCP port `80`). It serves as the integration contract for the companion Home Assistant integration (`displio-rebirth-ha`) as well as any custom scripts.
+This document defines the stable local HTTP API exposed by the Displio custom firmware over its **TI CC3000** Wi-Fi interface (default TCP port `80`). It serves as the integration contract for the companion Home Assistant integration ([displio-rebirth-ha](https://github.com/Ldo-fr/displio-rebirth-ha)) as well as any custom scripts.
 
 ---
 
