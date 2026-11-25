@@ -46,6 +46,7 @@
 #define CMD_WIFI_STAT  0x32u
 #define CMD_WIFI_CONN  0x33u
 #define CMD_WIFI_OFF   0x34u
+#define CMD_WIFI_IP    0x35u
 #define CMD_BOOTLOADER 0x7Fu
 
 static wifi_cfg_t g_wcfg;
@@ -291,8 +292,13 @@ static void handle_packet(const uint8_t rx[64]) {
         int rc = cc3000_init();
         if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
             g_wcfg_loaded = 1;
-            g_conn_start_ms = g_ms;
-            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+            /* TI CC3000 requires wlan_stop/start (re-init) for netapp_dhcp static/DHCP change to apply */
+            cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
+            rc = cc3000_init();
+            if (rc == 0) {
+                g_conn_start_ms = g_ms;
+                cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+            }
         }
         out[0] = (uint8_t)(rc & 0xFF);
         send_reply(cmd, rc == 0 ? 0u : 0x06u, out, 1);
@@ -300,6 +306,16 @@ static void handle_packet(const uint8_t rx[64]) {
     }
     case CMD_WIFI_OFF: {
         cc3000_power_off();
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_WIFI_IP: {
+        /* rx: [ip(4B), mask(4B), gw(4B)] — all zeros = DHCP */
+        for (int i = 0; i < 4; i++) {
+            g_wcfg.ip[i]   = rx[2 + i];
+            g_wcfg.mask[i] = rx[6 + i];
+            g_wcfg.gw[i]   = rx[10 + i];
+        }
         send_reply(cmd, 0, 0, 0);
         break;
     }
@@ -336,6 +352,7 @@ int main(void) {
     ui_draw_boot(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg_loaded ? g_wcfg.ssid : 0);
 
     if (g_wcfg_loaded && cc3000_init() == 0) {
+        cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
         g_conn_start_ms = g_ms;
         cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
     }
@@ -351,6 +368,15 @@ int main(void) {
             handle_packet(rx);
         }
         cc3000_poll();
+        /* Static IP mode: as soon as WPA2 associates (CONNECTED), skip DHCP wait */
+        if (g_cc.state == CC_STATE_CONNECTED && g_wcfg.ip[0] != 0u) {
+            for (int i = 0; i < 4; i++) {
+                g_cc.ip[i]   = g_wcfg.ip[i];
+                g_cc.mask[i] = g_wcfg.mask[i];
+                g_cc.gw[i]   = g_wcfg.gw[i];
+            }
+            g_cc.state = CC_STATE_DHCP_OK;
+        }
         if (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd < 0) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
@@ -394,6 +420,7 @@ int main(void) {
             uint8_t prev_reconn = g_cc.reconn_cnt;
             if (g_cc.state == CC_STATE_ERROR) {
                 if (cc3000_init() != 0) continue;
+                cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
             }
             g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
             g_conn_start_ms = g_ms;

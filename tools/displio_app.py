@@ -32,6 +32,7 @@ CMD_WIFI_PASS = 0x31
 CMD_WIFI_STAT = 0x32
 CMD_WIFI_CONN = 0x33
 CMD_WIFI_OFF = 0x34
+CMD_WIFI_IP = 0x35
 CMD_BOOTLOADER = 0x7F
 
 EPD_W, EPD_H = 264, 176
@@ -138,16 +139,27 @@ class DisplioApp:
         d = self.cmd(CMD_SPI2_XFER, struct.pack("<BBBB", cs_pp, mode, br_div, len(tx)) + tx)
         return d[:len(tx)]
 
-    def wifi_setup(self, ssid: str, password: str, sec: int = 3, port: int = 80):
+    def wifi_setup(self, ssid: str, password: str, sec: int = 3, port: int = 80,
+                   ip: str | None = None, mask: str = "255.255.255.0", gw: str | None = None):
         sb = ssid.encode("utf-8")[:32]
         pb = password.encode("utf-8")[:64]
         self.cmd(CMD_WIFI_SSID, struct.pack("<BHB", sec, port, len(sb)) + sb)
+        if ip:
+            ip_b = bytes(int(x) for x in ip.split("."))
+            mask_b = bytes(int(x) for x in mask.split("."))
+            gw_str = gw if gw else ".".join(ip.split(".")[:3] + ["1"])
+            gw_b = bytes(int(x) for x in gw_str.split("."))
+            if len(ip_b) != 4 or len(mask_b) != 4 or len(gw_b) != 4:
+                raise DisplioError("Invalid IPv4 address for --ip/--mask/--gw")
+            self.cmd(CMD_WIFI_IP, ip_b + mask_b + gw_b)
+        else:
+            self.cmd(CMD_WIFI_IP, b"\x00" * 12)
         if len(pb) <= 56:
             self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 0, len(pb), 1) + pb, timeout=2.0)
         else:
             self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 0, 56, 0) + pb[:56])
             self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 1, len(pb) - 56, 1) + pb[56:], timeout=2.0)
-        self.cmd(CMD_WIFI_CONN, timeout=6.0)
+        self.cmd(CMD_WIFI_CONN, timeout=10.0)
 
     def wifi_status(self) -> dict:
         d = self.cmd(CMD_WIFI_STAT, timeout=4.0)
@@ -269,6 +281,9 @@ def main(argv=None) -> int:
     ws.add_argument("password")
     ws.add_argument("--sec", choices=["open", "wep", "wpa", "wpa2"], default="wpa2")
     ws.add_argument("--port", type=int, default=80)
+    ws.add_argument("--ip", default=None, help="optional static IPv4 (e.g. 192.168.1.42); omits DHCP")
+    ws.add_argument("--mask", default="255.255.255.0", help="subnet mask for static IP (default 255.255.255.0)")
+    ws.add_argument("--gw", default=None, help="gateway IPv4 for static IP (defaults to x.y.z.1)")
     sub.add_parser("wifi-status", help="show CC3000 Wi-Fi & HTTP server status")
     sub.add_parser("wifi-off", help="power off CC3000 Wi-Fi module")
     sub.add_parser("wifi-probe", help="probe candidate Wi-Fi power/reset/IRQ pins and SPI2")
@@ -410,8 +425,10 @@ def main(argv=None) -> int:
                 app.gpio_ctrl(1, 12, 0x03, 0, wait_ms=10)
             elif a.cmd == "wifi-setup":
                 sec_map = {"open": 0, "wep": 1, "wpa": 2, "wpa2": 3}
-                print(f"saving Wi-Fi '{a.ssid}' (sec={a.sec}, port={a.port}) and connecting...")
-                app.wifi_setup(a.ssid, a.password, sec=sec_map[a.sec], port=a.port)
+                mode_str = f"static={a.ip}" if a.ip else "dhcp"
+                print(f"saving Wi-Fi '{a.ssid}' (sec={a.sec}, port={a.port}, {mode_str}) and connecting...")
+                app.wifi_setup(a.ssid, a.password, sec=sec_map[a.sec], port=a.port,
+                               ip=a.ip, mask=a.mask, gw=a.gw)
                 for _ in range(25):
                     st = app.wifi_status()
                     if st["http_listening"]:

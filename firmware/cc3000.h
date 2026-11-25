@@ -38,6 +38,7 @@ extern cc3000_t g_cc;
 
 int     cc3000_init(void);
 void    cc3000_power_off(void);
+int     cc3000_set_ip(const uint8_t ip[4], const uint8_t mask[4], const uint8_t gw[4]);
 int     cc3000_connect(const char *ssid, const char *pass, uint8_t sec);
 void    cc3000_poll(void);
 int     cc3000_get_ipconfig(void);

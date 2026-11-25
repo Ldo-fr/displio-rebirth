@@ -293,11 +293,6 @@ int cc3000_init(void) {
     for (int i = 0; i < 12; i++) pol[i] = 0;
     cc_cmd(OP_WLAN_SET_CONN_POLICY, pol, 12, 1000u);
 
-    /* Enable DHCP */
-    uint8_t dhcp[16];
-    for (int i = 0; i < 16; i++) dhcp[i] = 0;
-    cc_cmd(OP_NETAPP_DHCP, dhcp, 16, 1000u);
-
     /* Set timeouts: DHCP=14400s (4h default), ARP=3600s, Keepalive=10s, Inactivity=0 (never close listen socket) */
     uint8_t tmo[16];
     put_u32le(tmo + 0,  14400u);
@@ -309,6 +304,20 @@ int cc3000_init(void) {
     cc3000_get_ipconfig();
     g_cc.state = CC_STATE_INIT;
     return 0;
+}
+
+int cc3000_set_ip(const uint8_t ip[4], const uint8_t mask[4], const uint8_t gw[4]) {
+    uint8_t args[16];
+    if (ip && ip[0] != 0u) {
+        /* Static IP: CC3000 OP_NETAPP_DHCP takes reversed byte order (ip[3]..ip[0]) */
+        args[0]  = ip[3];   args[1]  = ip[2];   args[2]  = ip[1];   args[3]  = ip[0];
+        args[4]  = mask[3]; args[5]  = mask[2]; args[6]  = mask[1]; args[7]  = mask[0];
+        args[8]  = gw[3];   args[9]  = gw[2];   args[10] = gw[1];   args[11] = gw[0];
+        args[12] = gw[3];   args[13] = gw[2];   args[14] = gw[1];   args[15] = gw[0]; /* DNS = gw */
+    } else {
+        for (int i = 0; i < 16; i++) args[i] = 0u; /* DHCP */
+    }
+    return cc_cmd(OP_NETAPP_DHCP, args, 16, 1000u);
 }
 
 int cc3000_get_ipconfig(void) {
