@@ -1,0 +1,41 @@
+name: Build Firmware & Check Tools
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build STM32 Firmware & Check Python CLI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-arm-none-eabi make
+
+      - name: Build custom firmware
+        run: make -C firmware
+
+      - name: Build hardware discovery probe
+        run: make -C probe
+
+      - name: Check Python host tools syntax
+        run: python3 -m py_compile tools/displio_tool.py tools/displio_app.py
+
+      - name: Upload firmware binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: displio-fw
+          path: |
+            build/firmware/displio-fw.bin
+            build/firmware/displio-fw.elf
+          retention-days: 14
