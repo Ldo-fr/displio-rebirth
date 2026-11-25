@@ -363,7 +363,7 @@ int main(void) {
             }
             int st = cc3000_wlan_status();
             g_cc.last_wlan_st = (int8_t)st;
-            if (st != 3 || g_cc.ping_fail_cnt >= 3u) {
+            if (st != 3) {
                 g_cc.state = CC_STATE_ERROR;
                 g_cc.listen_sd = -1;
             } else {

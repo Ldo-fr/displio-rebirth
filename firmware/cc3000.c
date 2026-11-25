@@ -59,7 +59,7 @@
 cc3000_t g_cc;
 
 static uint8_t g_rx[300];
-static uint8_t g_tx[300];
+static uint8_t g_tx[540];
 static uint16_t g_rx_len = 0;
 
 static void udelay(uint32_t us) {
@@ -420,11 +420,10 @@ int cc3000_wlan_status(void) {
 int cc3000_ping_gw(void) {
     if (g_cc.state != CC_STATE_DHCP_OK || g_cc.gw[0] == 0u) return -1;
     uint8_t args[16];
-    /* CC3000 IP format on wire is reversed (gw[3]..gw[0]) */
-    args[0] = g_cc.gw[3];
-    args[1] = g_cc.gw[2];
-    args[2] = g_cc.gw[1];
-    args[3] = g_cc.gw[0];
+    args[0] = g_cc.gw[0];
+    args[1] = g_cc.gw[1];
+    args[2] = g_cc.gw[2];
+    args[3] = g_cc.gw[3];
     put_u32le(args + 4,  1u);    /* 1 attempt */
     put_u32le(args + 8,  32u);   /* 32-byte payload */
     put_u32le(args + 12, 1000u); /* 1000 ms timeout */
@@ -485,9 +484,10 @@ int32_t cc3000_tcp_recv(int32_t sd, uint8_t *buf, uint16_t max_len, uint32_t tim
 int32_t cc3000_tcp_send(int32_t sd, const uint8_t *buf, uint16_t len) {
     uint16_t sent = 0;
     uint16_t max_chunk = (g_cc.buf_len > 64u) ? (uint16_t)(g_cc.buf_len - 48u) : 128u;
-    if (max_chunk > 220u) max_chunk = 220u;
+    if (max_chunk > 480u) max_chunk = 480u;
 
     while (sent < len) {
+        cc3000_poll();
         uint32_t t0 = g_ms;
         while (g_cc.free_bufs == 0u) {
             cc3000_poll();
@@ -496,7 +496,7 @@ int32_t cc3000_tcp_send(int32_t sd, const uint8_t *buf, uint16_t len) {
         uint16_t chunk = (uint16_t)(len - sent);
         if (chunk > max_chunk) chunk = max_chunk;
 
-        uint8_t pkt[260];
+        uint8_t pkt[512];
         pkt[0] = HCI_TYPE_DATA;
         pkt[1] = OP_DATA_SEND;
         pkt[2] = 16u; /* args length */
@@ -510,6 +510,13 @@ int32_t cc3000_tcp_send(int32_t sd, const uint8_t *buf, uint16_t len) {
         g_cc.free_bufs--;
         if (cc_spi_write(pkt, (uint16_t)(21u + chunk), 0) != 0) return -2;
         sent += chunk;
+        if (sent < len) {
+            /* Drain EV_UNSOL_FREE_BUFF before next chunk to avoid SPI collision */
+            uint32_t tw = g_ms;
+            while (g_cc.free_bufs < g_cc.total_bufs && (uint32_t)(g_ms - tw) < 150u) {
+                cc3000_poll();
+            }
+        }
     }
     return (int32_t)sent;
 }

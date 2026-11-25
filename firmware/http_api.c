@@ -71,7 +71,7 @@ static void read_si7021(int32_t *temp_c_x100, int32_t *rh_x10) {
 }
 
 static void send_http(int32_t sd, const char *status, const char *ctype, const char *body) {
-    char buf[240];
+    char buf[480];
     uint16_t blen = 0;
     while (body[blen]) blen++;
     char *p = buf;
@@ -83,7 +83,7 @@ static void send_http(int32_t sd, const char *status, const char *ctype, const c
     p = append_int(p, blen);
     p = append_str(p, "\r\nConnection: close\r\n\r\n");
     uint16_t hlen = (uint16_t)(p - buf);
-    if ((uint16_t)(hlen + blen) <= 220u) {
+    if ((uint16_t)(hlen + blen) <= 470u) {
         for (uint16_t i = 0; i < blen; i++) p[i] = body[i];
         cc3000_tcp_send(sd, (const uint8_t *)buf, (uint16_t)(hlen + blen));
     } else {
