@@ -59,6 +59,18 @@ def crc16_en13757(data: bytes) -> int:
     return crc ^ 0xFFFF
 
 
+def stm32_crc32(data: bytes) -> int:
+    """STM32 hardware CRC-32 (poly 0x04C11DB7, init 0xFFFFFFFF, u32 LE words)."""
+    if len(data) % 4:
+        data = data + b"\xff" * (-len(data) % 4)
+    crc = 0xFFFFFFFF
+    for i in range(0, len(data), 4):
+        crc ^= struct.unpack_from("<I", data, i)[0]
+        for _ in range(32):
+            crc = ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF if crc & 0x80000000 else (crc << 1) & 0xFFFFFFFF
+    return crc
+
+
 def find_hidraw() -> str:
     for path in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
         try:
@@ -168,6 +180,57 @@ class Displio:
         if resp[1] != 0x02:
             raise DisplioError(f"unexpected erase reply: {resp[:12].hex()}")
 
+    def validate(self):
+        self.sync()
+        resp = self.command(CMD_FINALIZE, timeout=3.0)
+        if resp[1] != 0x02:
+            raise DisplioError(f"unexpected validate reply: {resp[:12].hex()}")
+
+    def flash_app(self, image: bytes, boot: bool = False, progress=None):
+        """Erase, write image + STM32 CRC-32 trailer at 0x0801FFFC, verify, validate, optionally boot."""
+        max_len = (APP_END - APP_START) - 4
+        if len(image) > max_len:
+            raise DisplioError(f"image too large ({len(image)} > {max_len} bytes)")
+        padded = image + b"\xff" * (-len(image) % 4)
+        full = padded + b"\xff" * (max_len - len(padded))
+        crc = stm32_crc32(full)
+        print("erasing...", file=sys.stderr)
+        self.erase_app()
+        print(f"writing {len(padded)} bytes + CRC 0x{crc:08x} at 0x{APP_END - 4:08x}...", file=sys.stderr)
+        self.write(APP_START, padded, progress)
+        self.write(APP_END - 4, struct.pack("<I", crc))
+        print("verifying...", file=sys.stderr)
+        back = self.read(APP_START, len(padded), progress)
+        if back != padded:
+            bad = next(i for i in range(len(padded)) if back[i] != padded[i])
+            raise DisplioError(f"verify failed at 0x{APP_START + bad:08x}")
+        print("validating (cmd 0x06)...", file=sys.stderr)
+        self.validate()
+        if boot:
+            print("starting application (cmd 0x07)...", file=sys.stderr)
+            self.reboot(CMD_BOOT_DELAYED)
+
+    def reboot(self, cmd: int = CMD_REBOOT) -> bytes | None:
+        """Send a command that makes the device re-enumerate; tolerate disconnect."""
+        self.sync()
+        try:
+            return self.command(cmd, timeout=4.0)
+        except (DisplioError, OSError):
+            return None
+
+
+def wait_for_device(timeout: float = 10.0, gone_first: float = 0.0) -> str:
+    deadline = time.time() + timeout
+    time.sleep(gone_first)
+    while time.time() < deadline:
+        try:
+            path = find_hidraw()
+            os.close(os.open(path, os.O_RDWR))
+            return path
+        except (DisplioError, OSError):
+            time.sleep(0.2)
+    raise DisplioError("device did not come back")
+
 
 def _check_range(addr: int, length: int):
     if addr < APP_START or addr + length > APP_END or length <= 0:
@@ -214,6 +277,13 @@ def main(argv=None) -> int:
     w.add_argument("--no-erase", action="store_true")
     w.add_argument("--yes", action="store_true", help="confirm")
 
+    fl = sub.add_parser("flash", help="erase, write, append STM32 CRC-32, verify and validate (DESTRUCTIVE)")
+    fl.add_argument("input")
+    fl.add_argument("--boot", action="store_true", help="launch application (cmd 0x07) after validation")
+    fl.add_argument("--yes", action="store_true", help="confirm")
+
+    rb = sub.add_parser("reboot", help="make the device re-enumerate (cmd 0x08, or 0x07)")
+    rb.add_argument("--opcode", type=_int, default=CMD_REBOOT, choices=[CMD_BOOT_DELAYED, CMD_REBOOT])
     a = p.parse_args(argv)
     try:
         with Displio(a.dev, a.verbose) as dev:
@@ -258,7 +328,21 @@ def main(argv=None) -> int:
                     bad = next(i for i in range(len(data)) if back[i] != data[i])
                     raise DisplioError(f"verify failed at 0x{a.addr + bad:08x}")
                 print(f"OK: {len(data)} bytes written and verified at 0x{a.addr:08x}")
-                print("note: boot/finalize (cmd 0x06) is not implemented yet")
+                print("note: use 'flash' to append CRC-32 and validate (cmd 0x06)")
+            elif a.cmd == "flash":
+                if not a.yes:
+                    raise DisplioError("refusing to flash without --yes")
+                with open(a.input, "rb") as f:
+                    data = f.read()
+                dev.flash_app(data, boot=a.boot, progress=_progress)
+                print(f"OK: {len(data)} bytes flashed and validated" + (" (booting)" if a.boot else ""))
+            elif a.cmd == "reboot":
+                resp = dev.reboot(a.opcode)
+                print(f"reply: {resp[:12].hex() if resp else 'none (disconnected)'}")
+        if a.cmd == "reboot":
+            t0 = time.time()
+            path = wait_for_device(15.0, gone_first=1.0)
+            print(f"device back on {path} after ~{time.time() - t0 + 1:.1f}s")
     except (DisplioError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
