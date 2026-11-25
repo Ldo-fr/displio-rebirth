@@ -8,10 +8,10 @@ Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-disp
 ## Status
 
 - [x] USB HID bootloader protocol reverse-engineered — see [docs/protocol.md](docs/protocol.md)
-- [x] Host tool: info / read / dump / erase / write + verify — `tools/displio_tool.py`
-- [ ] Understand boot hand-off (`0x06`) and the way back into the bootloader
-- [ ] Hardware discovery payload (MCU id, bootloader dump, pins)
-- [ ] Custom firmware: USB control of e-ink display, accelerometer, buzzer
+- [x] Host tool: info / read / dump / erase / write / flash (CRC-32 + validate + boot) — `tools/displio_tool.py`
+- [x] Boot hand-off (`0x06` STM32 CRC-32 at `0x0801FFFC`) and recovery (`BKP_DR1` + hold button `PA2` 1.5s on USB plug)
+- [x] Hardware discovery: **STM32F103xB** (72 MHz, 128 KiB Flash, 20 KiB RAM), Pervasive Displays 2.7" G2 E-Ink pinout, buzzer, button, USB pull-up — see [docs/hardware.md](docs/hardware.md)
+- [ ] Custom firmware: USB control of e-ink display, buzzer, bus scanner (I2C/SPI/UART for accelerometer & Wi-Fi)
 - [ ] Wi-Fi mode + local server
 
 ## Usage
