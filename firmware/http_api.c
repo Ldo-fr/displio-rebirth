@@ -71,10 +71,10 @@ static void read_si7021(int32_t *temp_c_x100, int32_t *rh_x10) {
 }
 
 static void send_http(int32_t sd, const char *status, const char *ctype, const char *body) {
-    char hdr[160];
+    char buf[240];
     uint16_t blen = 0;
     while (body[blen]) blen++;
-    char *p = hdr;
+    char *p = buf;
     p = append_str(p, "HTTP/1.1 ");
     p = append_str(p, status);
     p = append_str(p, "\r\nContent-Type: ");
@@ -82,8 +82,14 @@ static void send_http(int32_t sd, const char *status, const char *ctype, const c
     p = append_str(p, "\r\nContent-Length: ");
     p = append_int(p, blen);
     p = append_str(p, "\r\nConnection: close\r\n\r\n");
-    cc3000_tcp_send(sd, (const uint8_t *)hdr, (uint16_t)(p - hdr));
-    if (blen > 0) cc3000_tcp_send(sd, (const uint8_t *)body, blen);
+    uint16_t hlen = (uint16_t)(p - buf);
+    if ((uint16_t)(hlen + blen) <= 220u) {
+        for (uint16_t i = 0; i < blen; i++) p[i] = body[i];
+        cc3000_tcp_send(sd, (const uint8_t *)buf, (uint16_t)(hlen + blen));
+    } else {
+        cc3000_tcp_send(sd, (const uint8_t *)buf, hlen);
+        if (blen > 0) cc3000_tcp_send(sd, (const uint8_t *)body, blen);
+    }
 }
 
 static void handle_status(int32_t sd) {

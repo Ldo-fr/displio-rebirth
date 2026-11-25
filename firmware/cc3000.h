@@ -25,6 +25,7 @@ typedef struct {
     uint8_t    gw[4];
     uint8_t    mac[6];
     uint8_t    free_bufs;
+    uint8_t    total_bufs;
     uint16_t   buf_len;
     int32_t    listen_sd;
 } cc3000_t;

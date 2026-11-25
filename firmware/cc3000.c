@@ -185,6 +185,8 @@ static void handle_async_event(void) {
         for (uint16_t i = 0; i < entries && (7u + i * 4u + 4u) <= g_rx_len; i++) {
             g_cc.free_bufs += (uint8_t)get_u16le(g_rx + 7u + i * 4u + 2u);
         }
+        if (g_cc.total_bufs && g_cc.free_bufs > g_cc.total_bufs)
+            g_cc.free_bufs = g_cc.total_bufs;
     }
 }
 
@@ -253,14 +255,16 @@ int cc3000_init(void) {
     }
 
     if (cc_cmd(OP_READ_BUFFER_SIZE, 0, 0, 1000u) == 0 && g_rx_len >= 8u) {
-        g_cc.free_bufs = g_rx[5];
-        g_cc.buf_len   = get_u16le(g_rx + 6);
+        g_cc.free_bufs  = g_rx[5];
+        g_cc.total_bufs = g_rx[5];
+        g_cc.buf_len    = get_u16le(g_rx + 6);
     } else {
-        g_cc.free_bufs = 4;
-        g_cc.buf_len   = 256;
+        g_cc.free_bufs  = 4;
+        g_cc.total_bufs = 4;
+        g_cc.buf_len    = 256;
     }
 
-    if (cc_cmd(OP_READ_SP_VERSION, 0, 0, 1000u) == 0 && g_rx_len >= 7u) {
+    if (cc_cmd(OP_READ_SP_VERSION, 0, 0, 1000u) == 0 && g_rx_len >= 7u && g_rx[3] >= 3u) {
         g_cc.sp_ver[0] = g_rx[5];
         g_cc.sp_ver[1] = g_rx[6];
     }
@@ -466,6 +470,16 @@ int32_t cc3000_tcp_send(int32_t sd, const uint8_t *buf, uint16_t len) {
 
 void cc3000_tcp_close(int32_t sd) {
     if (sd < 0) return;
+    /* Let CC3000 flush all in-flight TX buffers and deliver the TCP segment
+       before closing, otherwise CC3000 aborts the socket with a TCP RST. */
+    uint32_t t0 = g_ms;
+    while (g_cc.free_bufs < g_cc.total_bufs && (uint32_t)(g_ms - t0) < 250u) {
+        cc3000_poll();
+    }
+    uint32_t t1 = g_ms;
+    while ((uint32_t)(g_ms - t1) < 60u) {
+        cc3000_poll();
+    }
     uint8_t args[4];
     put_u32le(args, (uint32_t)sd);
     cc_cmd(OP_CLOSE_SOCKET, args, 4, 1000u);
