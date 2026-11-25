@@ -170,8 +170,10 @@ void http_api_poll(uint8_t *fb_curr, uint8_t *fb_prev, uint8_t *fb_has_prev,
     } else if (starts_with((const char *)req, "POST /beep")) {
         uint16_t freq = parse_query_u16((const char *)req, "freq=", 2400u);
         uint16_t dur  = parse_query_u16((const char *)req, "ms=", 80u);
-        if (beep_fn) beep_fn(freq, dur);
         send_http(csd, "200 OK", "application/json", "{\"ok\":true}\n");
+        cc3000_tcp_close(csd);
+        if (beep_fn) beep_fn(freq, dur);
+        return;
     } else if (starts_with((const char *)req, "POST /display")) {
         uint8_t full = (uint8_t)parse_query_u16((const char *)req, "full=", 0u);
         /* Find end of HTTP headers (\r\n\r\n) */
