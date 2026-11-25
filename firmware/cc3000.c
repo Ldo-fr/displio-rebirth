@@ -32,6 +32,7 @@
 #define OP_ACCEPT                  0x1005u
 #define OP_LISTEN                  0x1006u
 #define OP_SELECT                  0x1008u
+#define OP_SETSOCKOPT              0x1009u
 #define OP_CLOSE_SOCKET            0x100Bu
 #define OP_NETAPP_DHCP             0x2001u
 #define OP_NETAPP_IPCONFIG         0x2005u
@@ -319,7 +320,7 @@ int cc3000_connect(const char *ssid, const char *pass, uint8_t sec) {
 }
 
 int32_t cc3000_tcp_listen(uint16_t port) {
-    uint8_t args[16];
+    uint8_t args[28];
     put_u32le(args + 0, 2u); /* AF_INET */
     put_u32le(args + 4, 1u); /* SOCK_STREAM */
     put_u32le(args + 8, 6u); /* IPPROTO_TCP */
@@ -327,16 +328,15 @@ int32_t cc3000_tcp_listen(uint16_t port) {
     int32_t sd = (int32_t)get_u32le(g_rx + 5);
     if (sd < 0) return -2;
 
-    /* BIND: [sd(u32), offset=8(u32), len=8(u32), family=2(u16le), port(u16be), ip=0(u32)] */
-    uint8_t bargs[20];
-    put_u32le(bargs + 0, (uint32_t)sd);
-    put_u32le(bargs + 4, 8u);
-    put_u32le(bargs + 8, 8u);
-    put_u16le(bargs + 12, 2u);
-    bargs[14] = (uint8_t)(port >> 8);
-    bargs[15] = (uint8_t)(port & 0xFFu);
-    put_u32le(bargs + 16, 0u);
-    if (cc_cmd(OP_BIND, bargs, 20, 1000u) != 0 || (int32_t)get_u32le(g_rx + 5) < 0) {
+    /* BIND: [sd(u32), offset=8(u32), len=16(u32), family=2(u16le), port(u16be), ip=0(u32), zero(8B)] */
+    for (int i = 0; i < 28; i++) args[i] = 0;
+    put_u32le(args + 0, (uint32_t)sd);
+    put_u32le(args + 4, 8u);
+    put_u32le(args + 8, 16u);
+    put_u16le(args + 12, 2u);
+    args[14] = (uint8_t)(port >> 8);
+    args[15] = (uint8_t)(port & 0xFFu);
+    if (cc_cmd(OP_BIND, args, 28, 1000u) != 0 || (int32_t)get_u32le(g_rx + 5) < 0) {
         cc3000_tcp_close(sd);
         return -3;
     }
@@ -348,19 +348,29 @@ int32_t cc3000_tcp_listen(uint16_t port) {
         cc3000_tcp_close(sd);
         return -4;
     }
+
+    /* SETSOCKOPT(sd, SOL_SOCKET=0xFFFF, SOCKOPT_ACCEPT_NONBLOCK=2, SOCK_ON=0, len=4) */
+    put_u32le(args + 0, (uint32_t)sd);
+    put_u32le(args + 4, 0xFFFFu);
+    put_u32le(args + 8, 2u);
+    put_u32le(args + 12, 8u); /* offset to optval */
+    put_u32le(args + 16, 4u); /* optlen */
+    put_u32le(args + 20, 0u); /* SOCK_ON = 0 on TI CC3000! */
+    cc_cmd(OP_SETSOCKOPT, args, 24, 1000u);
+
     g_cc.listen_sd = sd;
     return sd;
 }
 
 static int cc_select_readable(int32_t sd, uint32_t timeout_us) {
-    /* SELECT: [nfds, 0x14, 0x14, 0x14, 0x14, blocking=1, rset, wset, eset, tv_sec, tv_usec] */
+    /* SELECT: [nfds, 0x14, 0x14, 0x14, 0x14, blocking=0 (use timeout!), rset, wset, eset, tv_sec, tv_usec] */
     uint8_t args[44];
     put_u32le(args + 0,  (uint32_t)(sd + 1));
     put_u32le(args + 4,  0x14u);
     put_u32le(args + 8,  0x14u);
     put_u32le(args + 12, 0x14u);
     put_u32le(args + 16, 0x14u);
-    put_u32le(args + 20, 1u); /* blocking with timeout */
+    put_u32le(args + 20, 0u); /* 0 = use tv_sec/tv_usec timeout */
     put_u32le(args + 24, 1u << (uint32_t)sd);
     put_u32le(args + 28, 0u);
     put_u32le(args + 32, 0u);
@@ -375,10 +385,9 @@ static int cc_select_readable(int32_t sd, uint32_t timeout_us) {
 
 int32_t cc3000_tcp_accept_nb(int32_t listen_sd) {
     if (listen_sd < 0 || g_cc.state != CC_STATE_DHCP_OK) return -1;
-    if (!cc_select_readable(listen_sd, 5000u)) return -1;
     uint8_t args[4];
     put_u32le(args, (uint32_t)listen_sd);
-    if (cc_cmd(OP_ACCEPT, args, 4, 1000u) != 0 || g_rx_len < 13u) return -1;
+    if (cc_cmd(OP_ACCEPT, args, 4, 200u) != 0 || g_rx_len < 13u) return -1;
     int32_t csd = (int32_t)get_u32le(g_rx + 9);
     return (csd >= 0) ? csd : -1;
 }
