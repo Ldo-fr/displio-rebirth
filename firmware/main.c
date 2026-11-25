@@ -326,6 +326,8 @@ int main(void) {
     }
 
     uint8_t rx[64];
+    uint32_t last_http_ms = 0;
+    uint32_t last_reconn_ms = 0;
     for (;;) {
         if (usb_hid_rx_ready()) {
             usb_hid_read(rx);
@@ -336,7 +338,14 @@ int main(void) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
         }
-        http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
+        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
+            last_http_ms = g_ms;
+            http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
+        }
+        if (g_wcfg_loaded && g_cc.state == CC_STATE_INIT && (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
+            last_reconn_ms = g_ms;
+            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+        }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
         if (gpio_read(GPIOA, 2)) {
             uint32_t t0 = g_ms;

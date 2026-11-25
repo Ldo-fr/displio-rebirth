@@ -36,6 +36,7 @@
 #define OP_CLOSE_SOCKET            0x100Bu
 #define OP_NETAPP_DHCP             0x2001u
 #define OP_NETAPP_IPCONFIG         0x2005u
+#define OP_NETAPP_TIMEOUT_VALUES   0x2009u
 #define OP_SIMPLE_LINK_START       0x4000u
 #define OP_READ_SP_VERSION         0x4007u
 #define OP_READ_BUFFER_SIZE        0x400Bu
@@ -170,6 +171,7 @@ static void handle_async_event(void) {
         g_cc.state = CC_STATE_CONNECTED;
     } else if (op == EV_UNSOL_DISCONNECT) {
         g_cc.state = CC_STATE_INIT;
+        g_cc.listen_sd = -1;
         for (int i = 0; i < 4; i++) g_cc.ip[i] = 0;
     } else if (op == EV_UNSOL_DHCP && g_rx_len >= 21u) {
         /* CC3000 sends IP in reverse byte order (LSB first) in EV_UNSOL_DHCP */
@@ -277,6 +279,14 @@ int cc3000_init(void) {
     uint8_t dhcp[16];
     for (int i = 0; i < 16; i++) dhcp[i] = 0;
     cc_cmd(OP_NETAPP_DHCP, dhcp, 16, 1000u);
+
+    /* Set timeouts: DHCP=20s, ARP=3600s, Keepalive=10s, Inactivity=0 (never close listen socket) */
+    uint8_t tmo[16];
+    put_u32le(tmo + 0,  20u);
+    put_u32le(tmo + 4,  3600u);
+    put_u32le(tmo + 8,  10u);
+    put_u32le(tmo + 12, 0u);
+    cc_cmd(OP_NETAPP_TIMEOUT_VALUES, tmo, 16, 1000u);
 
     cc3000_get_ipconfig();
     g_cc.state = CC_STATE_INIT;
