@@ -361,6 +361,7 @@ int main(void) {
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
+    uint32_t last_ka_ms = 0;
     g_conn_start_ms = g_ms;
     for (;;) {
         if (usb_hid_rx_ready()) {
@@ -380,7 +381,9 @@ int main(void) {
         if (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd < 0) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
+            cc3000_udp_keepalive(); /* warm up router ARP/mesh immediately */
             last_wd_ms = g_ms;
+            last_ka_ms = g_ms;
             g_cc.ping_fail_cnt = 0;
             if (!g_wifi_ui_shown) {
                 g_wifi_ui_shown = 1;
@@ -391,6 +394,11 @@ int main(void) {
         if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 250u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
+        }
+        /* Lightweight 1-byte UDP keepalive to gw:9 every 8s (prevents 802.11 PS-Poll 10s stalls & ARP expiry) */
+        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_ka_ms) >= 8000u) {
+            last_ka_ms = g_ms;
+            cc3000_udp_keepalive();
         }
         /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) */
         if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 60000u) {

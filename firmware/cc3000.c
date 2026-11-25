@@ -32,6 +32,7 @@
 #define OP_RECV                    0x1004u
 #define OP_ACCEPT                  0x1005u
 #define OP_LISTEN                  0x1006u
+#define OP_CONNECT                 0x1007u
 #define OP_SELECT                  0x1008u
 #define OP_SETSOCKOPT              0x1009u
 #define OP_CLOSE_SOCKET            0x100Bu
@@ -174,8 +175,10 @@ static void handle_async_event(void) {
     if (op == EV_UNSOL_CONNECT) {
         g_cc.state = CC_STATE_CONNECTED;
     } else if (op == EV_UNSOL_DISCONNECT) {
-        g_cc.state = CC_STATE_INIT;
+        /* Force clean hardware re-init on disconnect so no stale TCP/UDP sockets leak */
+        g_cc.state = CC_STATE_ERROR;
         g_cc.listen_sd = -1;
+        g_cc.udp_sd = -1;
         for (int i = 0; i < 4; i++) g_cc.ip[i] = 0;
     } else if (op == EV_UNSOL_DHCP && g_rx_len >= 21u) {
         /* CC3000 sends IP in reverse byte order (LSB first) in EV_UNSOL_DHCP */
@@ -244,12 +247,14 @@ void cc3000_power_off(void) {
     CC_CS_HIGH();
     g_cc.state = CC_STATE_OFF;
     g_cc.listen_sd = -1;
+    g_cc.udp_sd = -1;
     for (int i = 0; i < 4; i++) g_cc.ip[i] = 0;
 }
 
 int cc3000_init(void) {
     for (uint32_t i = 0; i < sizeof(g_cc); i++) ((uint8_t *)&g_cc)[i] = 0;
     g_cc.listen_sd = -1;
+    g_cc.udp_sd = -1;
 
     gpio_config(GPIOA, 8, GPIO_MODE_IN_FLOAT);  /* PA8 = IRQ */
     gpio_config(GPIOB, 4, GPIO_MODE_OUT_PP_50); /* PB4 = CS */
@@ -438,6 +443,44 @@ int cc3000_ping_gw(void) {
     put_u32le(args + 12, 1000u); /* 1000 ms timeout */
     g_cc.ping_ok = 0u;
     return cc_cmd(OP_NETAPP_PING_SEND, args, 16, 1000u);
+}
+
+int cc3000_udp_keepalive(void) {
+    if (g_cc.state != CC_STATE_DHCP_OK || g_cc.gw[0] == 0u) return -1;
+    if (g_cc.udp_sd < 0) {
+        uint8_t args[28];
+        put_u32le(args + 0, 2u);  /* AF_INET */
+        put_u32le(args + 4, 2u);  /* SOCK_DGRAM */
+        put_u32le(args + 8, 17u); /* IPPROTO_UDP */
+        if (cc_cmd(OP_SOCKET, args, 12, 1000u) != 0 || g_rx_len < 9u) return -2;
+        int32_t sd = (int32_t)get_u32le(g_rx + 5);
+        if (sd < 0) return -3;
+
+        /* CONNECT UDP socket to gw:9 (DISCARD) so OP_DATA_SEND works without blocking */
+        for (int i = 0; i < 28; i++) args[i] = 0;
+        put_u32le(args + 0, (uint32_t)sd);
+        put_u32le(args + 4, 8u);
+        put_u32le(args + 8, 16u);
+        put_u16le(args + 12, 2u); /* AF_INET */
+        args[14] = 0u;
+        args[15] = 9u;            /* port 9 (DISCARD) */
+        args[16] = g_cc.gw[0];
+        args[17] = g_cc.gw[1];
+        args[18] = g_cc.gw[2];
+        args[19] = g_cc.gw[3];
+        if (cc_cmd(OP_CONNECT, args, 28, 1000u) != 0 || (int32_t)get_u32le(g_rx + 5) < 0) {
+            cc3000_tcp_close(sd);
+            return -4;
+        }
+        g_cc.udp_sd = sd;
+    }
+    uint8_t b = 0x00u;
+    if (cc3000_tcp_send(g_cc.udp_sd, &b, 1u) < 0) {
+        cc3000_tcp_close(g_cc.udp_sd);
+        g_cc.udp_sd = -1;
+        return -5;
+    }
+    return 0;
 }
 
 int32_t cc3000_tcp_accept_nb(int32_t listen_sd) {
