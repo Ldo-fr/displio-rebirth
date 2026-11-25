@@ -6,6 +6,19 @@ void USB_LP_IRQHandler(void);
 
 volatile uint32_t g_ms = 0;
 
+void *memcpy(void *dst, const void *src, uint32_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (n--) *d++ = *s++;
+    return dst;
+}
+
+void *memset(void *dst, int c, uint32_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    while (n--) *d++ = (uint8_t)c;
+    return dst;
+}
+
 void SysTick_Handler(void) {
     g_ms++;
 }

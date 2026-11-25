@@ -3,6 +3,9 @@
 Give a second life to the **Displio V1.0** e-ink desk display (Draugiem Group, 2015)
 whose cloud service is gone: replace its firmware with an open one, updatable over USB.
 
+> [!NOTE]
+> This is an independent, volunteer-driven open-source project created so that a great idea doesn't end up forgotten at the bottom of a drawer or in the trash. It is **not affiliated with, endorsed by, or associated with** Displio or Draugiem Group in any way.
+
 Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-display-that-tracks-whats-important-t
 
 ## Status
@@ -13,7 +16,8 @@ Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-disp
 - [x] Hardware discovery: **STM32F103xB** (72 MHz, 128 KiB Flash, 20 KiB RAM), Pervasive Displays 2.7" G2 E-Ink pinout, buzzer, button, USB pull-up — see [docs/hardware.md](docs/hardware.md)
 - [x] Custom firmware (`firmware/`): USB HID (`DISPLIO REBIRTH`), Pervasive Displays 2.7" E-Ink driver, piezo buzzer, hands-free bootloader return (`BKP_DR1`)
 - [x] Full peripheral discovery & drivers: `MMA8452Q` accelerometer (`I2C1 0x1C`), `Si7021` temp/humidity (`I2C1 0x40`), Battery ADC (`PC13` → `PA0`), and **TI `CC3000` Wi-Fi** (`SPI2`, `PB12=EN`, `PB4=CS`, `PA8=IRQ`)
-- [ ] CC3000 Wi-Fi driver (STA connect + TCP/HTTP API) & companion Home Assistant HACS integration (`displio-rebirth-ha`)
+- [x] TI `CC3000` Wi-Fi STA driver + persistent Flash config + local HTTP REST API (`GET /status`, `POST /display`, `POST /beep`) — see [docs/api.md](docs/api.md)
+- [ ] Companion Home Assistant HACS integration (separate repo `displio-rebirth-ha`)
 
 ## Building & Flashing Custom Firmware
 

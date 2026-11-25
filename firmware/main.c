@@ -21,6 +21,9 @@
 #include "epd.h"
 #include "bus_scan.h"
 #include "sensors.h"
+#include "cc3000.h"
+#include "wifi_cfg.h"
+#include "http_api.h"
 
 #define MAGIC_REQ  0xA5u
 #define MAGIC_RESP 0x5Au
@@ -37,7 +40,15 @@
 #define CMD_I2C_XFER   0x21u
 #define CMD_GPIO_CTRL  0x22u
 #define CMD_SPI2_XFER  0x23u
+#define CMD_WIFI_SSID  0x30u
+#define CMD_WIFI_PASS  0x31u
+#define CMD_WIFI_STAT  0x32u
+#define CMD_WIFI_CONN  0x33u
+#define CMD_WIFI_OFF   0x34u
 #define CMD_BOOTLOADER 0x7Fu
+
+static wifi_cfg_t g_wcfg;
+static uint8_t    g_wcfg_loaded = 0;
 
 static uint8_t g_fb_curr[EPD_FB_SIZE];
 static uint8_t g_fb_prev[EPD_FB_SIZE];
@@ -230,6 +241,58 @@ static void handle_packet(const uint8_t rx[64]) {
         send_reply(cmd, 0, out, len);
         break;
     }
+    case CMD_WIFI_SSID: {
+        /* rx: [sec(0..3), port_lo, port_hi, ssid_len(<=32), ssid...] */
+        g_wcfg.sec  = rx[2];
+        g_wcfg.port = (uint16_t)(rx[3] | (rx[4] << 8));
+        if (g_wcfg.port == 0u) g_wcfg.port = 80u;
+        uint8_t n = rx[5]; if (n > 32u) n = 32u;
+        for (uint8_t i = 0; i < 33u; i++) g_wcfg.ssid[i] = (i < n) ? (char)rx[6u + i] : '\0';
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_WIFI_PASS: {
+        /* rx: [part(0=bytes 0..55, 1=bytes 56..63), len, data..., save_flag] */
+        uint8_t part = rx[2], len = rx[3], save = rx[4];
+        uint8_t off = (part == 0u) ? 0u : 56u;
+        if (part == 0u) { for (int i = 0; i < 65; i++) g_wcfg.pass[i] = '\0'; }
+        for (uint8_t i = 0; i < len && (off + i) < 64u; i++) g_wcfg.pass[off + i] = (char)rx[5u + i];
+        if (save) {
+            wifi_cfg_save(&g_wcfg);
+            g_wcfg_loaded = 1;
+        }
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_WIFI_STAT: {
+        cc3000_poll();
+        out[0] = (uint8_t)g_cc.state;
+        out[1] = g_wcfg_loaded ? g_wcfg.sec : 0xFFu;
+        out[2] = g_cc.ip[0]; out[3] = g_cc.ip[1]; out[4] = g_cc.ip[2]; out[5] = g_cc.ip[3];
+        for (int i = 0; i < 6; i++) out[6 + i] = g_cc.mac[i];
+        out[12] = g_cc.sp_ver[0]; out[13] = g_cc.sp_ver[1];
+        out[14] = (uint8_t)(g_wcfg.port & 0xFFu);
+        out[15] = (uint8_t)(g_wcfg.port >> 8);
+        out[16] = (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd >= 0) ? 1u : 0u;
+        for (int i = 0; i < 32; i++) out[17 + i] = (uint8_t)g_wcfg.ssid[i];
+        send_reply(cmd, 0, out, 49);
+        break;
+    }
+    case CMD_WIFI_CONN: {
+        int rc = cc3000_init();
+        if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
+            g_wcfg_loaded = 1;
+            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+        }
+        out[0] = (uint8_t)(rc & 0xFF);
+        send_reply(cmd, rc == 0 ? 0u : 0x06u, out, 1);
+        break;
+    }
+    case CMD_WIFI_OFF: {
+        cc3000_power_off();
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
     case CMD_BOOTLOADER: {
         send_reply(cmd, 0, 0, 0);
         delay_ms(50);
@@ -254,11 +317,34 @@ int main(void) {
     /* Short friendly startup chirp (2200 Hz, 40 ms) so user knows custom fw booted! */
     buzzer_beep(2200, 40);
 
+    /* Auto-connect Wi-Fi if credentials are saved in Flash */
+    if (wifi_cfg_load(&g_wcfg) == 0) {
+        g_wcfg_loaded = 1;
+        if (cc3000_init() == 0) {
+            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+        }
+    }
+
     uint8_t rx[64];
+    uint32_t last_http_ms = 0;
+    uint32_t last_reconn_ms = 0;
     for (;;) {
         if (usb_hid_rx_ready()) {
             usb_hid_read(rx);
             handle_packet(rx);
+        }
+        cc3000_poll();
+        if (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd < 0) {
+            cc3000_get_ipconfig();
+            cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
+        }
+        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
+            last_http_ms = g_ms;
+            http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
+        }
+        if (g_wcfg_loaded && g_cc.state == CC_STATE_INIT && (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
+            last_reconn_ms = g_ms;
+            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
         if (gpio_read(GPIOA, 2)) {
