@@ -176,22 +176,33 @@ void http_api_poll(uint8_t *fb_curr, uint8_t *fb_prev, uint8_t *fb_has_prev,
         return;
     } else if (starts_with((const char *)req, "POST /display")) {
         uint8_t full = (uint8_t)parse_query_u16((const char *)req, "full=", 0u);
-        /* Find end of HTTP headers (\r\n\r\n) */
-        int32_t body_off = -1;
-        for (int32_t i = 0; i + 3 < n; i++) {
-            if (req[i] == '\r' && req[i+1] == '\n' && req[i+2] == '\r' && req[i+3] == '\n') {
-                body_off = i + 4;
-                break;
+        /* Stream-parse until end of HTTP headers (\r\n\r\n), even if headers exceed 200 bytes */
+        static const uint8_t sep[4] = {'\r', '\n', '\r', '\n'};
+        uint8_t match = 0;
+        uint32_t got = 0;
+        for (int32_t i = 0; i < n; i++) {
+            if (match < 4u) {
+                if (req[i] == sep[match]) match++;
+                else match = (req[i] == '\r') ? 1u : 0u;
+            } else if (got < EPD_FB_SIZE) {
+                fb_curr[got++] = req[i];
             }
         }
-        uint32_t got = 0;
-        if (body_off >= 0) {
-            for (int32_t i = body_off; i < n && got < EPD_FB_SIZE; i++)
-                fb_curr[got++] = req[i];
+        uint32_t t0 = g_ms;
+        while (match < 4u && (uint32_t)(g_ms - t0) < 3000u) {
+            int32_t r = cc3000_tcp_recv(csd, req, 200u, 1500u);
+            if (r <= 0) break;
+            for (int32_t i = 0; i < r; i++) {
+                if (match < 4u) {
+                    if (req[i] == sep[match]) match++;
+                    else match = (req[i] == '\r') ? 1u : 0u;
+                } else if (got < EPD_FB_SIZE) {
+                    fb_curr[got++] = req[i];
+                }
+            }
         }
         /* Read remaining framebuffer bytes */
-        uint32_t t0 = g_ms;
-        while (got < EPD_FB_SIZE && (uint32_t)(g_ms - t0) < 8000u) {
+        while (match == 4u && got < EPD_FB_SIZE && (uint32_t)(g_ms - t0) < 8000u) {
             uint16_t want = (uint16_t)((EPD_FB_SIZE - got > 200u) ? 200u : (EPD_FB_SIZE - got));
             int32_t r = cc3000_tcp_recv(csd, fb_curr + got, want, 1500u);
             if (r <= 0) break;

@@ -186,18 +186,40 @@ class Displio:
         if resp[1] != 0x02:
             raise DisplioError(f"unexpected validate reply: {resp[:12].hex()}")
 
-    def flash_app(self, image: bytes, boot: bool = False, progress=None):
-        """Erase, write image + STM32 CRC-32 trailer at 0x0801FFFC, verify, validate, optionally boot."""
+    def flash_app(self, image: bytes, boot: bool = False, progress=None, preserve_wifi: bool = True):
+        """Erase, write image + STM32 CRC-32 trailer at 0x0801FFFC, verify, validate, optionally boot.
+
+        By default preserves the saved Wi-Fi config block at 0x0801F800 across updates.
+        """
+        wifi_addr = 0x0801F800
+        wifi_len = 128
         max_len = (APP_END - APP_START) - 4
         if len(image) > max_len:
             raise DisplioError(f"image too large ({len(image)} > {max_len} bytes)")
         padded = image + b"\xff" * (-len(image) % 4)
-        full = padded + b"\xff" * (max_len - len(padded))
-        crc = stm32_crc32(full)
+
+        saved_wifi: bytes | None = None
+        if preserve_wifi and len(padded) <= (wifi_addr - APP_START):
+            try:
+                blob = self.read(wifi_addr, wifi_len)
+                if blob[:4] in (b"2FIW", b"IFIW"):
+                    saved_wifi = blob
+                    print(f"preserving saved Wi-Fi config at 0x{wifi_addr:08x}...", file=sys.stderr)
+            except (DisplioError, OSError):
+                saved_wifi = None
+
+        full = bytearray(padded + b"\xff" * (max_len - len(padded)))
+        if saved_wifi is not None:
+            off = wifi_addr - APP_START
+            full[off:off + len(saved_wifi)] = saved_wifi
+        crc = stm32_crc32(bytes(full))
         print("erasing...", file=sys.stderr)
         self.erase_app()
         print(f"writing {len(padded)} bytes + CRC 0x{crc:08x} at 0x{APP_END - 4:08x}...", file=sys.stderr)
         self.write(APP_START, padded, progress)
+        if saved_wifi is not None:
+            print(f"restoring Wi-Fi config at 0x{wifi_addr:08x}...", file=sys.stderr)
+            self.write(wifi_addr, saved_wifi)
         self.write(APP_END - 4, struct.pack("<I", crc))
         print("verifying...", file=sys.stderr)
         back = self.read(APP_START, len(padded), progress)
@@ -280,6 +302,7 @@ def main(argv=None) -> int:
     fl = sub.add_parser("flash", help="erase, write, append STM32 CRC-32, verify and validate (DESTRUCTIVE)")
     fl.add_argument("input")
     fl.add_argument("--boot", action="store_true", help="launch application (cmd 0x07) after validation")
+    fl.add_argument("--wipe-wifi", action="store_true", help="do not preserve saved Wi-Fi config at 0x0801F800")
     fl.add_argument("--yes", action="store_true", help="confirm")
 
     rb = sub.add_parser("reboot", help="make the device re-enumerate (cmd 0x08, or 0x07)")
@@ -334,7 +357,7 @@ def main(argv=None) -> int:
                     raise DisplioError("refusing to flash without --yes")
                 with open(a.input, "rb") as f:
                     data = f.read()
-                dev.flash_app(data, boot=a.boot, progress=_progress)
+                dev.flash_app(data, boot=a.boot, progress=_progress, preserve_wifi=not a.wipe_wifi)
                 print(f"OK: {len(data)} bytes flashed and validated" + (" (booting)" if a.boot else ""))
             elif a.cmd == "reboot":
                 resp = dev.reboot(a.opcode)

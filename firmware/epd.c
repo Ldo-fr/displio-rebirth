@@ -23,9 +23,14 @@
 #define EPD_DISCHARGE_HIGH() gpio_set(GPIOA, 4)
 
 static uint8_t spi1_xfer(uint8_t b) {
+    while (!(SPI1->SR & (1u << 1))) {} /* wait TXE=1 */
     SPI1->DR = b;
-    while (SPI1->SR & (1u << 7)) {} /* wait BSY=0 */
+    while (!(SPI1->SR & (1u << 0))) {} /* wait RXNE=1 */
     return (uint8_t)SPI1->DR;
+}
+
+static void spi1_wait_done(void) {
+    while (SPI1->SR & (1u << 7)) {} /* wait BSY=0 before raising CS */
 }
 
 static void epd_wait_busy(void) {
@@ -39,10 +44,12 @@ static void epd_write_reg(uint8_t idx, const uint8_t *data, uint16_t len) {
     EPD_CS_LOW();
     spi1_xfer(0x70);
     spi1_xfer(idx);
+    spi1_wait_done();
     EPD_CS_HIGH();
     EPD_CS_LOW();
     spi1_xfer(0x72);
     for (uint16_t i = 0; i < len; i++) spi1_xfer(data[i]);
+    spi1_wait_done();
     EPD_CS_HIGH();
 }
 
@@ -153,6 +160,7 @@ static void epd_send_line(uint8_t line, const uint8_t even[33], const uint8_t od
     EPD_CS_LOW();
     spi1_xfer(0x70);
     spi1_xfer(0x0A);
+    spi1_wait_done();
     EPD_CS_HIGH();
 
     EPD_CS_LOW();
@@ -160,6 +168,7 @@ static void epd_send_line(uint8_t line, const uint8_t even[33], const uint8_t od
         epd_wait_busy();
         spi1_xfer(buf[i]);
     }
+    spi1_wait_done();
     EPD_CS_HIGH();
     epd_write_reg1(0x02, 0x07); /* Output enable */
 }

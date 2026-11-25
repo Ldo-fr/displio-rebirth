@@ -90,8 +90,8 @@ This produces `build/firmware/displio-fw.bin` (~13 KiB).
 
 ### 3. Flash and Boot
 
-> [!WARNING]
-> Flashing replaces the application firmware in `0x08004000`–`0x0801FFFF` (including any previously saved Wi-Fi credentials). The factory USB bootloader at `0x08000000` is never touched.
+> [!NOTE]
+> Flashing replaces the application firmware in `0x08004000`–`0x0801FFFF` while **automatically preserving your saved Wi-Fi credentials** at `0x0801F800` (pass `--wipe-wifi` to clear them). The factory USB bootloader at `0x08000000` is never touched.
 
 ```bash
 python3 tools/displio_tool.py flash build/firmware/displio-fw.bin --boot --yes
