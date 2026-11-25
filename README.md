@@ -36,7 +36,7 @@ Original Kickstarter campaign: https://www.kickstarter.com/projects/914874115/di
 - [x] **Phase 3**: Custom bare-metal STM32 firmware (USB HID `DISPLIO REBIRTH`, 2.7" E-Ink, piezo buzzer, hands-free bootloader re-entry)
 - [x] **Phase 4**: Full peripheral drivers (`MMA8452Q`, `Si7021`, Battery ADC, TI `CC3000` Wi-Fi)
 - [x] **Phase 5**: TI `CC3000` Wi-Fi STA driver, persistent Flash config, and local HTTP REST API — [docs/api.md](docs/api.md)
-- [x] **Phase 6**: Public release, CI firmware builds, and PRD — [docs/PRD.md](docs/PRD.md)
+- [x] **Phase 6**: Public release, CI firmware builds, and automated Releases
 - [ ] **Phase 7**: Companion Home Assistant HACS integration (`displio-rebirth-ha`, separate repository)
 
 ---
@@ -201,7 +201,6 @@ You **cannot** brick the Displio with this project:
 
 ## Documentation
 
-- [docs/PRD.md](docs/PRD.md) — Product Requirements Document, architecture, and roadmap
 - [docs/hardware.md](docs/hardware.md) — MCU details, memory map, and verified GPIO/SPI/I2C pinout
 - [docs/protocol.md](docs/protocol.md) — Reverse-engineered USB HID bootloader protocol
 - [docs/api.md](docs/api.md) — Local HTTP/1.1 REST API specification (`v1.0`)
