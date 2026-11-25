@@ -30,6 +30,8 @@ typedef struct {
     int32_t    listen_sd;
     uint8_t    ping_ok;
     uint8_t    ping_fail_cnt;
+    uint8_t    reconn_cnt;
+    int8_t     last_wlan_st;
 } cc3000_t;
 
 extern cc3000_t g_cc;

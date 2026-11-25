@@ -150,10 +150,10 @@ class DisplioApp:
         self.cmd(CMD_WIFI_CONN, timeout=6.0)
 
     def wifi_status(self) -> dict:
-        d = self.cmd(CMD_WIFI_STAT, timeout=2.0)
+        d = self.cmd(CMD_WIFI_STAT, timeout=4.0)
         states = ["OFF", "INIT", "CONNECTING", "CONNECTED", "DHCP_OK", "ERROR"]
         st = states[d[0]] if d[0] < len(states) else f"0x{d[0]:02x}"
-        return {
+        out = {
             "state": st,
             "sec": d[1],
             "ip": ".".join(str(b) for b in d[2:6]),
@@ -163,6 +163,13 @@ class DisplioApp:
             "http_listening": bool(d[16]),
             "ssid": d[17:49].split(b"\x00", 1)[0].decode("utf-8", errors="replace"),
         }
+        if len(d) >= 57:
+            out["gw"] = ".".join(str(b) for b in d[49:53])
+            out["wlan_st"] = d[53] if d[53] < 128 else d[53] - 256
+            out["ping_ok"] = d[54]
+            out["ping_fail"] = d[55]
+            out["reconn"] = d[56]
+        return out
 
     def wifi_off(self):
         self.cmd(CMD_WIFI_OFF)

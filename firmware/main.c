@@ -49,6 +49,7 @@
 
 static wifi_cfg_t g_wcfg;
 static uint8_t    g_wcfg_loaded = 0;
+static uint32_t   g_conn_start_ms = 0;
 
 static uint8_t g_fb_curr[EPD_FB_SIZE];
 static uint8_t g_fb_prev[EPD_FB_SIZE];
@@ -275,13 +276,19 @@ static void handle_packet(const uint8_t rx[64]) {
         out[15] = (uint8_t)(g_wcfg.port >> 8);
         out[16] = (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd >= 0) ? 1u : 0u;
         for (int i = 0; i < 32; i++) out[17 + i] = (uint8_t)g_wcfg.ssid[i];
-        send_reply(cmd, 0, out, 49);
+        out[49] = g_cc.gw[0]; out[50] = g_cc.gw[1]; out[51] = g_cc.gw[2]; out[52] = g_cc.gw[3];
+        out[53] = (uint8_t)g_cc.last_wlan_st;
+        out[54] = g_cc.ping_ok;
+        out[55] = g_cc.ping_fail_cnt;
+        out[56] = g_cc.reconn_cnt;
+        send_reply(cmd, 0, out, 57);
         break;
     }
     case CMD_WIFI_CONN: {
         int rc = cc3000_init();
         if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
             g_wcfg_loaded = 1;
+            g_conn_start_ms = g_ms;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         out[0] = (uint8_t)(rc & 0xFF);
@@ -329,7 +336,7 @@ int main(void) {
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
-    uint32_t conn_start_ms = g_ms;
+    g_conn_start_ms = g_ms;
     uint8_t ping_sent = 0;
     for (;;) {
         if (usb_hid_rx_ready()) {
@@ -355,6 +362,7 @@ int main(void) {
                 g_cc.ping_fail_cnt++;
             }
             int st = cc3000_wlan_status();
+            g_cc.last_wlan_st = (int8_t)st;
             if (st != 3 || g_cc.ping_fail_cnt >= 3u) {
                 g_cc.state = CC_STATE_ERROR;
                 g_cc.listen_sd = -1;
@@ -366,7 +374,7 @@ int main(void) {
         /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
         if (g_wcfg_loaded &&
             (g_cc.state == CC_STATE_CONNECTING || g_cc.state == CC_STATE_CONNECTED) &&
-            (uint32_t)(g_ms - conn_start_ms) >= 25000u) {
+            (uint32_t)(g_ms - g_conn_start_ms) >= 25000u) {
             g_cc.state = CC_STATE_ERROR;
         }
         /* Auto-reconnect (with full hardware reset on CC_STATE_ERROR) */
@@ -374,10 +382,12 @@ int main(void) {
             (g_cc.state == CC_STATE_INIT || g_cc.state == CC_STATE_ERROR) &&
             (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
             last_reconn_ms = g_ms;
+            uint8_t prev_reconn = g_cc.reconn_cnt;
             if (g_cc.state == CC_STATE_ERROR) {
                 if (cc3000_init() != 0) continue;
             }
-            conn_start_ms = g_ms;
+            g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
+            g_conn_start_ms = g_ms;
             ping_sent = 0;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
