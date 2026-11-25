@@ -279,13 +279,11 @@ static void handle_packet(const uint8_t rx[64]) {
         break;
     }
     case CMD_WIFI_CONN: {
-        if (!g_wcfg_loaded && wifi_cfg_load(&g_wcfg) != 0) {
-            send_reply(cmd, 0x05u, 0, 0);
-            break;
-        }
-        g_wcfg_loaded = 1;
         int rc = cc3000_init();
-        if (rc == 0) rc = cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+        if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
+            g_wcfg_loaded = 1;
+            rc = cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+        }
         out[0] = (uint8_t)(rc & 0xFF);
         send_reply(cmd, rc == 0 ? 0u : 0x06u, out, 1);
         break;

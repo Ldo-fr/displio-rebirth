@@ -130,12 +130,13 @@ static int cc_spi_read(void) {
 /* Write one SPI frame (hci_payload of hci_len bytes). */
 static int cc_spi_write(const uint8_t *hci, uint16_t hci_len, int is_first) {
     uint16_t pad = (hci_len & 1u) ? 0u : 1u;
-    uint16_t total = (uint16_t)(5u + hci_len + pad);
+    uint16_t wire_payload = (uint16_t)(hci_len + pad);
+    uint16_t total = (uint16_t)(5u + wire_payload);
     if (total > sizeof(g_tx)) return -1;
 
     g_tx[0] = 0x01u; /* WRITE */
-    g_tx[1] = (uint8_t)(hci_len >> 8);
-    g_tx[2] = (uint8_t)(hci_len & 0xFFu);
+    g_tx[1] = (uint8_t)(wire_payload >> 8);
+    g_tx[2] = (uint8_t)(wire_payload & 0xFFu);
     g_tx[3] = 0x00u;
     g_tx[4] = 0x00u;
     for (uint16_t i = 0; i < hci_len; i++) g_tx[5u + i] = hci[i];
