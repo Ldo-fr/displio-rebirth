@@ -11,8 +11,29 @@ Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-disp
 - [x] Host tool: info / read / dump / erase / write / flash (CRC-32 + validate + boot) — `tools/displio_tool.py`
 - [x] Boot hand-off (`0x06` STM32 CRC-32 at `0x0801FFFC`) and recovery (`BKP_DR1` + hold button `PA2` 1.5s on USB plug)
 - [x] Hardware discovery: **STM32F103xB** (72 MHz, 128 KiB Flash, 20 KiB RAM), Pervasive Displays 2.7" G2 E-Ink pinout, buzzer, button, USB pull-up — see [docs/hardware.md](docs/hardware.md)
-- [ ] Custom firmware: USB control of e-ink display, buzzer, bus scanner (I2C/SPI/UART for accelerometer & Wi-Fi)
-- [ ] Wi-Fi mode + local server
+- [x] Custom firmware (`firmware/`): USB HID (`DISPLIO REBIRTH`), Pervasive Displays 2.7" E-Ink driver, piezo buzzer, I2C/GPIO/ADC/SPI2 bus scanner, hands-free bootloader return (`BKP_DR1`)
+- [ ] Accelerometer (`MMA8452Q`), I2C `0x40` sensor, Wi-Fi module bring-up & local server
+
+## Building & Flashing Custom Firmware
+
+Requires `gcc-arm-none-eabi` and Linux hidraw access (`99-displio.rules`):
+
+```sh
+# 1. Build firmware (STM32F103xB, linked at 0x08004000)
+make -C firmware
+
+# 2. Flash from bootloader mode and boot immediately
+python3 tools/displio_tool.py flash build/firmware/displio-fw.bin --boot --yes
+
+# 3. Interact with the running custom firmware over USB HID
+python3 tools/displio_app.py info
+python3 tools/displio_app.py beep --freq 2700 --ms 60
+python3 tools/displio_app.py epd-test --full
+python3 tools/displio_app.py scan
+
+# 4. Return hands-free to the USB bootloader for the next update
+python3 tools/displio_app.py bootloader
+```
 
 ## Usage
 

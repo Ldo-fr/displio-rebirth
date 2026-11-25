@@ -1,0 +1,218 @@
+/*
+ * displio-rebirth custom firmware (Phase 3)
+ *
+ * USB HID command protocol (64-byte reports, CRC-16/EN-13757 in bytes 62..63):
+ *   Request:  [0xA5, cmd, payload (60B), crc16_le (2B)]
+ *   Response: [0x5A, cmd, status (0=OK), payload (59B), crc16_le (2B)]
+ *
+ * Commands:
+ *   0x10 PING/INFO      -> "REBIRTH" + version + uptime + button + vbus
+ *   0x11 BEEP           -> [freq_hz:u16, dur_ms:u16] on PB0 (TIM3_CH3)
+ *   0x12 FB_WRITE       -> [offset:u16, len:u8 (<=56), data...]
+ *   0x13 FB_CLEAR       -> [pattern:u8]
+ *   0x14 EPD_REFRESH    -> [full_clear:u8]
+ *   0x15 SCAN_I2C       -> [remap:u8 (0=PB6/7, 1=PB8/9)] -> [count, (addr,0F,0D,00)...]
+ *   0x16 SCAN_GPIO_ADC  -> [GPIOA/B/C IDR (3xu16), ADC ch0..9+Vref (11xu16)]
+ *   0x17 SCAN_SPI2      -> [count, (port_pin, id0, id1, id2)...]
+ *   0x7F BOOTLOADER     -> sets BKP_DR1=0xB007 and resets into USB bootloader!
+ */
+#include "stm32f103.h"
+#include "usb_hid.h"
+#include "epd.h"
+#include "bus_scan.h"
+
+#define MAGIC_REQ  0xA5u
+#define MAGIC_RESP 0x5Au
+
+#define CMD_INFO       0x10u
+#define CMD_BEEP       0x11u
+#define CMD_FB_WRITE   0x12u
+#define CMD_FB_CLEAR   0x13u
+#define CMD_EPD_SHOW   0x14u
+#define CMD_SCAN_I2C   0x15u
+#define CMD_SCAN_IO    0x16u
+#define CMD_SCAN_SPI2  0x17u
+#define CMD_BOOTLOADER 0x7Fu
+
+static uint8_t g_fb_curr[EPD_FB_SIZE];
+static uint8_t g_fb_prev[EPD_FB_SIZE];
+static uint8_t g_fb_has_prev = 0;
+
+static uint16_t crc16_en13757(const uint8_t *data, uint16_t len) {
+    uint16_t crc = 0;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x8000u) ? (uint16_t)((crc << 1) ^ 0x3D65u) : (uint16_t)(crc << 1);
+    }
+    return (uint16_t)(crc ^ 0xFFFFu);
+}
+
+static void buzzer_beep(uint16_t freq_hz, uint16_t dur_ms) {
+    if (freq_hz < 100u || freq_hz > 10000u || dur_ms == 0u) return;
+    if (dur_ms > 2000u) dur_ms = 2000u;
+
+    RCC_APB1ENR |= (1u << 1); /* TIM3EN */
+    gpio_config(GPIOB, 0, GPIO_MODE_AF_PP_50); /* PB0 = TIM3_CH3 */
+
+    uint32_t arr = (7200000u / freq_hz) - 1u; /* PSC=9 -> 7.2 MHz */
+    TIM3->CR1   = 0;
+    TIM3->PSC   = 9u;
+    TIM3->ARR   = arr;
+    TIM3->CCR3  = arr >> 1;
+    TIM3->CCMR2 = (6u << 4) | (1u << 3); /* OC3M = PWM1, OC3PE */
+    TIM3->CCER  = (1u << 8);             /* CC3E */
+    TIM3->EGR   = 1u;                    /* UG */
+    TIM3->CR1   = 1u;                    /* CEN */
+
+    delay_ms(dur_ms);
+
+    TIM3->CR1  = 0;
+    TIM3->CCER = 0;
+    gpio_config(GPIOB, 0, GPIO_MODE_OUT_PP_50);
+    gpio_clear(GPIOB, 0);
+}
+
+static void send_reply(uint8_t cmd, uint8_t status, const uint8_t *payload, uint8_t len) {
+    uint8_t pkt[64];
+    for (int i = 0; i < 64; i++) pkt[i] = 0;
+    pkt[0] = MAGIC_RESP;
+    pkt[1] = cmd;
+    pkt[2] = status;
+    if (len > 59u) len = 59u;
+    for (uint8_t i = 0; i < len; i++) pkt[3 + i] = payload[i];
+    uint16_t crc = crc16_en13757(pkt, 62);
+    pkt[62] = (uint8_t)(crc & 0xFFu);
+    pkt[63] = (uint8_t)(crc >> 8);
+    usb_hid_send(pkt);
+}
+
+static void handle_packet(const uint8_t rx[64]) {
+    uint16_t rx_crc = (uint16_t)(rx[62] | (rx[63] << 8));
+    if (rx[0] != MAGIC_REQ || crc16_en13757(rx, 62) != rx_crc) {
+        send_reply(rx[1], 0xEEu, 0, 0);
+        return;
+    }
+
+    uint8_t cmd = rx[1];
+    uint8_t out[59];
+    for (int i = 0; i < 59; i++) out[i] = 0;
+
+    switch (cmd) {
+    case CMD_INFO: {
+        static const char tag[8] = "REBIRTH1";
+        for (int i = 0; i < 8; i++) out[i] = (uint8_t)tag[i];
+        uint32_t up = g_ms;
+        out[8]  = (uint8_t)(up & 0xFFu);
+        out[9]  = (uint8_t)((up >> 8) & 0xFFu);
+        out[10] = (uint8_t)((up >> 16) & 0xFFu);
+        out[11] = (uint8_t)((up >> 24) & 0xFFu);
+        out[12] = gpio_read(GPIOA, 2); /* button */
+        out[13] = gpio_read(GPIOA, 9); /* VBUS */
+        out[14] = g_fb_has_prev;
+        send_reply(cmd, 0, out, 16);
+        break;
+    }
+    case CMD_BEEP: {
+        uint16_t freq = (uint16_t)(rx[2] | (rx[3] << 8));
+        uint16_t dur  = (uint16_t)(rx[4] | (rx[5] << 8));
+        buzzer_beep(freq, dur);
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_FB_WRITE: {
+        uint16_t off = (uint16_t)(rx[2] | (rx[3] << 8));
+        uint8_t  len = rx[4];
+        if (len > 56u || (uint32_t)off + len > EPD_FB_SIZE) {
+            send_reply(cmd, 0x02u, 0, 0);
+            break;
+        }
+        for (uint8_t i = 0; i < len; i++) g_fb_curr[off + i] = rx[5 + i];
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_FB_CLEAR: {
+        uint8_t pat = rx[2];
+        for (uint32_t i = 0; i < EPD_FB_SIZE; i++) g_fb_curr[i] = pat;
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_EPD_SHOW: {
+        uint8_t full = rx[2];
+        int rc = epd_refresh(g_fb_has_prev ? g_fb_prev : 0, g_fb_curr, full);
+        if (rc == 0) {
+            for (uint32_t i = 0; i < EPD_FB_SIZE; i++) g_fb_prev[i] = g_fb_curr[i];
+            g_fb_has_prev = 1;
+        }
+        out[0] = (uint8_t)(rc & 0xFF);
+        send_reply(cmd, rc == 0 ? 0u : 0x03u, out, 1);
+        break;
+    }
+    case CMD_SCAN_I2C: {
+        uint8_t remap = rx[2] ? 1u : 0u;
+        uint8_t n = scan_i2c1(remap, out + 1, 14);
+        out[0] = n;
+        send_reply(cmd, 0, out, (uint8_t)(1u + n * 4u));
+        break;
+    }
+    case CMD_SCAN_IO: {
+        uint16_t idr[3], adc[11];
+        scan_gpio_adc(idr, adc);
+        for (int i = 0; i < 3; i++) {
+            out[i * 2]     = (uint8_t)(idr[i] & 0xFFu);
+            out[i * 2 + 1] = (uint8_t)(idr[i] >> 8);
+        }
+        for (int i = 0; i < 11; i++) {
+            out[6 + i * 2]     = (uint8_t)(adc[i] & 0xFFu);
+            out[6 + i * 2 + 1] = (uint8_t)(adc[i] >> 8);
+        }
+        send_reply(cmd, 0, out, 28);
+        break;
+    }
+    case CMD_SCAN_SPI2: {
+        uint8_t n = scan_spi2_jedec(out + 1, 14);
+        out[0] = n;
+        send_reply(cmd, 0, out, (uint8_t)(1u + n * 4u));
+        break;
+    }
+    case CMD_BOOTLOADER: {
+        send_reply(cmd, 0, 0, 0);
+        delay_ms(50);
+        enter_bootloader();
+        break;
+    }
+    default:
+        send_reply(cmd, 0xFFu, 0, 0);
+        break;
+    }
+}
+
+int main(void) {
+    /* Configure button PA2 & VBUS PA9 as inputs */
+    gpio_config(GPIOA, 2, GPIO_MODE_IN_FLOAT);
+    gpio_config(GPIOA, 9, GPIO_MODE_IN_FLOAT);
+
+    epd_init_pins();
+    usb_hid_init();
+
+    /* Short friendly startup chirp (2200 Hz, 40 ms) so user knows custom fw booted! */
+    buzzer_beep(2200, 40);
+
+    uint8_t rx[64];
+    for (;;) {
+        if (usb_hid_rx_ready()) {
+            usb_hid_read(rx);
+            handle_packet(rx);
+        }
+        /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
+        if (gpio_read(GPIOA, 2)) {
+            uint32_t t0 = g_ms;
+            while (gpio_read(GPIOA, 2)) {
+                if ((uint32_t)(g_ms - t0) > 2000u) {
+                    buzzer_beep(1500, 60);
+                    enter_bootloader();
+                }
+            }
+        }
+    }
+}

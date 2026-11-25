@@ -47,18 +47,29 @@ Extracted 100% over USB via the Phase 2 hardware probe (`probe/probe.c`) and dis
 | `PB0` | AF PP (`TIM3_CH3`) | **Piezo Buzzer** | PWM ~2730 Hz (`PSC=9, ARR=2637, CCR3=1318`); LOW PP when off |
 | `PB1` | Output PP | **EPD_PANEL_ON** | Active LOW (P-MOSFET power switch for E-Ink panel) |
 | `PB2` | Output PP | **EPD_RESET** | Active LOW reset for E-Ink COG |
+| `PB6` / `PB7` | I2C1 (`SCL`/`SDA`) | **I2C1 Bus** | External pull-ups present; hosts `0x1C` (`MMA8452Q`) and `0x40` |
 | `PB10` | Input floating | **EPD_BUSY** | `1` = E-Ink controller busy |
 | `PB11` | Output PP | **EPD_CS** | Active LOW SPI chip select for E-Ink |
-| `PB12` | Output PP | Unknown (reset LOW at boot) | Candidate: SPI2 CS / Wi-Fi / Flash |
+| `PB12` | Output PP | Unknown (reset LOW at boot) | Candidate: Wi-Fi / SPI2 CS |
 | `PC13` | Output PP | Unknown (configured PP at boot) | Candidate: LED / Wi-Fi / Power |
+
+## Confirmed I2C1 Devices (`PB6 = SCL`, `PB7 = SDA`)
+
+Discovered by the Phase 3 bus scanner (`tools/displio_app.py scan`):
+- **`0x1C`** (`reg 0x0D = 0x2A`): **NXP/Freescale `MMA8452Q`** 3-axis accelerometer (orientation, tap, shake).
+- **`0x40`**: Temperature/humidity or power-monitor IC (likely `Si7021`/`HTU21D`/`SHT21` for E-Ink temperature compensation or `INA219` — register probe in Phase 4).
+
+## Analog / Power
+
+- **`VDDA`**: ~**2.96 V** (measured via internal `Vrefint` = `1662` on 12-bit ADC1).
 
 ## E-Ink Display
 
 - **Panel**: Pervasive Displays **2.7" monochrome E-Ink** (`264 × 176` pixels = `5808` bytes 1-bpp framebuffer) with **G2 COG driver** (`0x70` register index, `0x72` data write, `0x73` data read, `0x71` COG ID read).
-- **Bootloader driver**: Complete working power-on (`0x080022F0`), 4-stage update (`0x08002180`), and power-off (`0x08001E88`) implementation verified in the bootloader dump.
+- **Custom driver (`firmware/epd.c`)**: Verified on hardware — 5808-byte framebuffer uploads in ~0.21 s over USB HID and refreshes cleanly in ~3.3 s.
 
-## Still to Discover (Phase 3 Bus Scanner)
+## Still to Discover (Phase 4)
 
-- **Accelerometer** (likely I2C1 `PB6/PB7` or I2C2 `PB10/PB11` — note `PB10/PB11` are used by EPD, so likely **I2C1 `PB6/PB7`** or **SPI2 `PB13/PB14/PB15`**).
-- **Wi-Fi module** (likely USART1/2/3 or SPI2 — exact pins and chip model to be probed from our Phase 3 USB firmware).
-- **External SPI Flash** (if present) and **Battery ADC** channel.
+- Exact IC at I2C `0x40` (`Si7021`/`HTU21D` vs `INA219`/`HDC1080`).
+- **Wi-Fi module** interface (likely `USART1`/`USART2`/`USART3` or `SPI2` after enabling its power rail / reset pin such as `PB12` or `PC13`).
+- **Battery ADC** channel (possibly gated by a power-enable pin).
