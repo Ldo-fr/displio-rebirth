@@ -68,10 +68,18 @@ The host tool always sends `SYNC` before each logical operation.
 | `0x03` | ERASE_APP | — | `xx 02 00…` after ~2.5 s; erases the whole 112 KiB application area **[confirmed]** |
 | `0x04` | WRITE | `N:u8 (1..13)`, `addr:u32le`, `N × u32` | `xx 02 00…` **[confirmed]** |
 | `0x05` | READ | `N:u8 (1..13)`, `addr:u32le` | `xx 05 N addr:u32le data[N×4]` **[confirmed]** |
-| `0x06` | FINALIZE / VERIFY | unknown | with an empty/garbage app → error `0x05` **[tentative]** |
-| `0x07` | ? | — | no reply, device re-enumerates after ~3 s **[observed]** |
-| `0x08` | ? | — | device re-enumerates immediately **[observed]** |
+| `0x06` | VALIDATE | — (payload ignored) | `xx 02 00…` if the image CRC is valid, else error `0x05` **[confirmed]** |
+| `0x07` | START_APP | — | no reply; after a successful `0x06` the bootloader jumps to the application and USB disappears **[confirmed]** |
+| `0x08` | ? | — | device re-enumerates (stays in bootloader) **[observed]** |
 | other | — | — | error `0x08` |
+
+### Application image format **[confirmed]**
+
+* Vector table at `0x08004000` (initial SP, reset handler, …).
+* The last word of the area, `0x0801FFFC`, holds the **STM32 hardware CRC-32**
+  (poly `0x04C11DB7`, init `0xFFFFFFFF`, 32-bit little-endian words, no reflection,
+  no final xor) computed over `0x08004000..0x0801FFFB`, unused bytes = `0xFF`.
+* `0x06` checks that CRC; `0x07` then starts the application.
 
 Throughput: about 25 KiB/s for reads (52 bytes per round-trip).
 
@@ -88,11 +96,13 @@ Throughput: about 25 KiB/s for reads (52 bytes per round-trip).
 
 ## Open questions
 
-1. Parameters expected by `0x06` and what it validates (CRC? size? magic?).
-2. Does the bootloader jump to the application automatically at reset when a
-   valid vector table is present, or only after `0x06`/`0x07`?
+1. ~~Parameters expected by `0x06`~~ — solved: CRC-32 at `0x0801FFFC`.
+2. ~~Does the bootloader jump automatically?~~ — after `0x06` + `0x07` it does,
+   and it presumably does so at every reset while the CRC is valid.
 3. What brings the device back into the bootloader once an application runs
-   (USB plugged at reset? magic word in RAM? timeout?) — critical to avoid bricking.
+   (the original firmware had a USB command `0x0b` for that; mechanism unknown:
+   RAM magic, backup register, flash flag?) — **critical**: an application that
+   never re-enters the bootloader leaves no USB recovery path.
 4. Exact STM32 part number, clock and pin mapping (display, accelerometer, Wi-Fi,
    buzzer, battery).
 

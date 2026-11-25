@@ -168,6 +168,27 @@ class Displio:
         if resp[1] != 0x02:
             raise DisplioError(f"unexpected erase reply: {resp[:12].hex()}")
 
+    def reboot(self, cmd: int = CMD_REBOOT) -> bytes | None:
+        """Send a command that makes the device re-enumerate; tolerate disconnect."""
+        self.sync()
+        try:
+            return self.command(cmd, timeout=4.0)
+        except (DisplioError, OSError):
+            return None
+
+
+def wait_for_device(timeout: float = 10.0, gone_first: float = 0.0) -> str:
+    deadline = time.time() + timeout
+    time.sleep(gone_first)
+    while time.time() < deadline:
+        try:
+            path = find_hidraw()
+            os.close(os.open(path, os.O_RDWR))
+            return path
+        except (DisplioError, OSError):
+            time.sleep(0.2)
+    raise DisplioError("device did not come back")
+
 
 def _check_range(addr: int, length: int):
     if addr < APP_START or addr + length > APP_END or length <= 0:
@@ -214,6 +235,8 @@ def main(argv=None) -> int:
     w.add_argument("--no-erase", action="store_true")
     w.add_argument("--yes", action="store_true", help="confirm")
 
+    rb = sub.add_parser("reboot", help="make the device re-enumerate (cmd 0x08, or 0x07)")
+    rb.add_argument("--opcode", type=_int, default=CMD_REBOOT, choices=[CMD_BOOT_DELAYED, CMD_REBOOT])
     a = p.parse_args(argv)
     try:
         with Displio(a.dev, a.verbose) as dev:
@@ -259,6 +282,13 @@ def main(argv=None) -> int:
                     raise DisplioError(f"verify failed at 0x{a.addr + bad:08x}")
                 print(f"OK: {len(data)} bytes written and verified at 0x{a.addr:08x}")
                 print("note: boot/finalize (cmd 0x06) is not implemented yet")
+            elif a.cmd == "reboot":
+                resp = dev.reboot(a.opcode)
+                print(f"reply: {resp[:12].hex() if resp else 'none (disconnected)'}")
+        if a.cmd == "reboot":
+            t0 = time.time()
+            path = wait_for_device(15.0, gone_first=1.0)
+            print(f"device back on {path} after ~{time.time() - t0 + 1:.1f}s")
     except (DisplioError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

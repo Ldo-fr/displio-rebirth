@@ -3,6 +3,8 @@
 Give a second life to the **Displio V1.0** e-ink desk display (Draugiem Group, 2015)
 whose cloud service is gone: replace its firmware with an open one, updatable over USB.
 
+Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-display-that-tracks-whats-important-t
+
 ## Status
 
 - [x] USB HID bootloader protocol reverse-engineered — see [docs/protocol.md](docs/protocol.md)
