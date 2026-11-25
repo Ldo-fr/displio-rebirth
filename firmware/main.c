@@ -328,6 +328,9 @@ int main(void) {
     uint8_t rx[64];
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
+    uint32_t last_wd_ms = 0;
+    uint32_t conn_start_ms = g_ms;
+    uint8_t ping_sent = 0;
     for (;;) {
         if (usb_hid_rx_ready()) {
             usb_hid_read(rx);
@@ -337,13 +340,45 @@ int main(void) {
         if (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd < 0) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
+            last_wd_ms = g_ms;
+            ping_sent = 0;
+            g_cc.ping_fail_cnt = 0;
         }
         if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
         }
-        if (g_wcfg_loaded && g_cc.state == CC_STATE_INIT && (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
+        /* Wi-Fi health watchdog every 30s: check WLAN status + ping gateway to keep AP/ARP alive */
+        if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 30000u) {
+            last_wd_ms = g_ms;
+            if (ping_sent && !g_cc.ping_ok) {
+                g_cc.ping_fail_cnt++;
+            }
+            int st = cc3000_wlan_status();
+            if (st != 3 || g_cc.ping_fail_cnt >= 3u) {
+                g_cc.state = CC_STATE_ERROR;
+                g_cc.listen_sd = -1;
+            } else {
+                cc3000_ping_gw();
+                ping_sent = 1;
+            }
+        }
+        /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
+        if (g_wcfg_loaded &&
+            (g_cc.state == CC_STATE_CONNECTING || g_cc.state == CC_STATE_CONNECTED) &&
+            (uint32_t)(g_ms - conn_start_ms) >= 25000u) {
+            g_cc.state = CC_STATE_ERROR;
+        }
+        /* Auto-reconnect (with full hardware reset on CC_STATE_ERROR) */
+        if (g_wcfg_loaded &&
+            (g_cc.state == CC_STATE_INIT || g_cc.state == CC_STATE_ERROR) &&
+            (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
             last_reconn_ms = g_ms;
+            if (g_cc.state == CC_STATE_ERROR) {
+                if (cc3000_init() != 0) continue;
+            }
+            conn_start_ms = g_ms;
+            ping_sent = 0;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */

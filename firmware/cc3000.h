@@ -28,6 +28,8 @@ typedef struct {
     uint8_t    total_bufs;
     uint16_t   buf_len;
     int32_t    listen_sd;
+    uint8_t    ping_ok;
+    uint8_t    ping_fail_cnt;
 } cc3000_t;
 
 extern cc3000_t g_cc;
@@ -37,6 +39,8 @@ void    cc3000_power_off(void);
 int     cc3000_connect(const char *ssid, const char *pass, uint8_t sec);
 void    cc3000_poll(void);
 int     cc3000_get_ipconfig(void);
+int     cc3000_wlan_status(void);
+int     cc3000_ping_gw(void);
 
 /* Minimal BSD-style TCP server sockets */
 int32_t cc3000_tcp_listen(uint16_t port);

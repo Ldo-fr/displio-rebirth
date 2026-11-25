@@ -26,6 +26,7 @@
 #define OP_WLAN_DISCONNECT         0x0002u
 #define OP_WLAN_SET_CONN_POLICY    0x0004u
 #define OP_WLAN_SET_EVENT_MASK     0x0008u
+#define OP_WLAN_IOCTL_STATUSGET    0x0009u
 #define OP_SOCKET                  0x1001u
 #define OP_BIND                    0x1002u
 #define OP_RECV                    0x1004u
@@ -35,6 +36,7 @@
 #define OP_SETSOCKOPT              0x1009u
 #define OP_CLOSE_SOCKET            0x100Bu
 #define OP_NETAPP_DHCP             0x2001u
+#define OP_NETAPP_PING_SEND        0x2002u
 #define OP_NETAPP_IPCONFIG         0x2005u
 #define OP_NETAPP_TIMEOUT_VALUES   0x2009u
 #define OP_SIMPLE_LINK_START       0x4000u
@@ -50,6 +52,8 @@
 #define EV_UNSOL_DISCONNECT        0x8002u
 #define EV_UNSOL_DHCP              0x8010u
 #define EV_UNSOL_KEEPALIVE         0x8200u
+#define EV_UNSOL_PING_REPORT       0x8400u
+#define EV_UNSOL_BSD_CLOSE_WAIT    0x8800u
 #define EV_UNSOL_FREE_BUFF         0x4100u
 
 cc3000_t g_cc;
@@ -179,6 +183,16 @@ static void handle_async_event(void) {
         g_cc.mask[0] = g_rx[12]; g_cc.mask[1] = g_rx[11]; g_cc.mask[2] = g_rx[10]; g_cc.mask[3] = g_rx[9];
         g_cc.gw[0]   = g_rx[16]; g_cc.gw[1]   = g_rx[15]; g_cc.gw[2]   = g_rx[14]; g_cc.gw[3]   = g_rx[13];
         if (g_cc.ip[0] != 0u) g_cc.state = CC_STATE_DHCP_OK;
+    } else if (op == EV_UNSOL_PING_REPORT && g_rx_len >= 13u) {
+        if (get_u32le(g_rx + 9) > 0u) {
+            g_cc.ping_ok = 1u;
+            g_cc.ping_fail_cnt = 0u;
+        }
+    } else if (op == EV_UNSOL_BSD_CLOSE_WAIT && g_rx_len >= 9u) {
+        int32_t sd = (int32_t)get_u32le(g_rx + 5);
+        if (sd >= 0 && sd == g_cc.listen_sd) {
+            g_cc.listen_sd = -1;
+        }
     } else if (op == EV_UNSOL_FREE_BUFF && g_rx_len >= 9u) {
         /* Flow control: [04 00 41 arglen num_entries(u16) ... (handle u16, freed u16)] */
         uint16_t entries = get_u16le(g_rx + 5);
@@ -284,9 +298,9 @@ int cc3000_init(void) {
     for (int i = 0; i < 16; i++) dhcp[i] = 0;
     cc_cmd(OP_NETAPP_DHCP, dhcp, 16, 1000u);
 
-    /* Set timeouts: DHCP=20s, ARP=3600s, Keepalive=10s, Inactivity=0 (never close listen socket) */
+    /* Set timeouts: DHCP=14400s (4h default), ARP=3600s, Keepalive=10s, Inactivity=0 (never close listen socket) */
     uint8_t tmo[16];
-    put_u32le(tmo + 0,  20u);
+    put_u32le(tmo + 0,  14400u);
     put_u32le(tmo + 4,  3600u);
     put_u32le(tmo + 8,  10u);
     put_u32le(tmo + 12, 0u);
@@ -397,13 +411,45 @@ static int cc_select_readable(int32_t sd, uint32_t timeout_us) {
     return (status > 0 && (rset & (1u << (uint32_t)sd))) ? 1 : 0;
 }
 
+int cc3000_wlan_status(void) {
+    if (cc_cmd(OP_WLAN_IOCTL_STATUSGET, 0, 0, 1000u) != 0 || g_rx_len < 9u)
+        return -1;
+    return (int)get_u32le(g_rx + 5);
+}
+
+int cc3000_ping_gw(void) {
+    if (g_cc.state != CC_STATE_DHCP_OK || g_cc.gw[0] == 0u) return -1;
+    uint8_t args[16];
+    /* CC3000 IP format on wire is reversed (gw[3]..gw[0]) */
+    args[0] = g_cc.gw[3];
+    args[1] = g_cc.gw[2];
+    args[2] = g_cc.gw[1];
+    args[3] = g_cc.gw[0];
+    put_u32le(args + 4,  1u);    /* 1 attempt */
+    put_u32le(args + 8,  32u);   /* 32-byte payload */
+    put_u32le(args + 12, 1000u); /* 1000 ms timeout */
+    g_cc.ping_ok = 0u;
+    return cc_cmd(OP_NETAPP_PING_SEND, args, 16, 1000u);
+}
+
 int32_t cc3000_tcp_accept_nb(int32_t listen_sd) {
     if (listen_sd < 0 || g_cc.state != CC_STATE_DHCP_OK) return -1;
     uint8_t args[4];
     put_u32le(args, (uint32_t)listen_sd);
-    if (cc_cmd(OP_ACCEPT, args, 4, 200u) != 0 || g_rx_len < 13u) return -1;
+    if (cc_cmd(OP_ACCEPT, args, 4, 200u) != 0 || g_rx_len < 13u) {
+        /* HCI timeout / SPI hang: force full CC3000 reset */
+        g_cc.state = CC_STATE_ERROR;
+        g_cc.listen_sd = -1;
+        return -1;
+    }
     int32_t csd = (int32_t)get_u32le(g_rx + 9);
-    return (csd >= 0) ? csd : -1;
+    if (csd >= 0) return csd;
+    if (csd != -2) {
+        /* Anything other than SOC_IN_PROGRESS (-2) means listen_sd died */
+        cc3000_tcp_close(listen_sd);
+        g_cc.listen_sd = -1;
+    }
+    return -1;
 }
 
 int32_t cc3000_tcp_recv(int32_t sd, uint8_t *buf, uint16_t max_len, uint32_t timeout_ms) {
