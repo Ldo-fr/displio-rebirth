@@ -24,6 +24,7 @@
 #include "cc3000.h"
 #include "wifi_cfg.h"
 #include "http_api.h"
+#include "ui.h"
 
 #define MAGIC_REQ  0xA5u
 #define MAGIC_RESP 0x5Au
@@ -50,6 +51,7 @@
 static wifi_cfg_t g_wcfg;
 static uint8_t    g_wcfg_loaded = 0;
 static uint32_t   g_conn_start_ms = 0;
+static uint8_t    g_wifi_ui_shown = 0;
 
 static uint8_t g_fb_curr[EPD_FB_SIZE];
 static uint8_t g_fb_prev[EPD_FB_SIZE];
@@ -285,6 +287,7 @@ static void handle_packet(const uint8_t rx[64]) {
         break;
     }
     case CMD_WIFI_CONN: {
+        g_wifi_ui_shown = 0;
         int rc = cc3000_init();
         if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
             g_wcfg_loaded = 1;
@@ -327,15 +330,22 @@ int main(void) {
     /* Auto-connect Wi-Fi if credentials are saved in Flash */
     if (wifi_cfg_load(&g_wcfg) == 0) {
         g_wcfg_loaded = 1;
-        if (cc3000_init() == 0) {
-            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
-        }
+    }
+
+    /* Show boot splash + test strip (mire) on E-Ink */
+    ui_draw_boot(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg_loaded ? g_wcfg.ssid : 0);
+
+    if (g_wcfg_loaded && cc3000_init() == 0) {
+        g_conn_start_ms = g_ms;
+        cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
     }
 
     uint8_t rx[64];
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
+    uint32_t ping_pause_until = 0;
+    uint8_t  ping_pending = 0;
     g_conn_start_ms = g_ms;
     for (;;) {
         if (usb_hid_rx_ready()) {
@@ -348,23 +358,35 @@ int main(void) {
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
             last_wd_ms = g_ms;
             g_cc.ping_fail_cnt = 0;
+            ping_pending = 0;
+            if (!g_wifi_ui_shown) {
+                g_wifi_ui_shown = 1;
+                ui_draw_wifi_ok(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg.ssid, g_cc.ip);
+            }
         }
-        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
+        /* Poll HTTP accept at 4 Hz (250 ms) — plenty fast for REST, keeps CC3000 CPU free for ICMP/ARP */
+        if (g_cc.state == CC_STATE_DHCP_OK &&
+            (int32_t)(g_ms - ping_pause_until) >= 0 &&
+            (uint32_t)(g_ms - last_http_ms) >= 250u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
         }
-        /* Wi-Fi health watchdog every 30s: verify WLAN_STATUS_CONNECTED (3) */
-        if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 30000u) {
+        /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) + non-overlapping gateway ping */
+        if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 60000u) {
             last_wd_ms = g_ms;
+            if (ping_pending && !g_cc.ping_ok) {
+                g_cc.ping_fail_cnt++;
+            }
             int st = cc3000_wlan_status();
             g_cc.last_wlan_st = (int8_t)st;
-            if (st != 3) {
-                if (++g_cc.ping_fail_cnt >= 2u) {
-                    g_cc.state = CC_STATE_ERROR;
-                    g_cc.listen_sd = -1;
-                }
+            if (st != 3 || g_cc.ping_fail_cnt >= 3u) {
+                g_cc.state = CC_STATE_ERROR;
+                g_cc.listen_sd = -1;
             } else {
-                g_cc.ping_fail_cnt = 0u;
+                cc3000_ping_gw();
+                ping_pending = 1;
+                /* Pause OP_ACCEPT for 1.5s while CC3000 processes the 1s gateway ping */
+                ping_pause_until = g_ms + 1500u;
             }
         }
         /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
@@ -384,6 +406,7 @@ int main(void) {
             }
             g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
             g_conn_start_ms = g_ms;
+            ping_pending = 0;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
