@@ -20,6 +20,7 @@
 #include "usb_hid.h"
 #include "epd.h"
 #include "bus_scan.h"
+#include "sensors.h"
 
 #define MAGIC_REQ  0xA5u
 #define MAGIC_RESP 0x5Au
@@ -32,6 +33,10 @@
 #define CMD_SCAN_I2C   0x15u
 #define CMD_SCAN_IO    0x16u
 #define CMD_SCAN_SPI2  0x17u
+#define CMD_ACCEL      0x20u
+#define CMD_I2C_XFER   0x21u
+#define CMD_GPIO_CTRL  0x22u
+#define CMD_SPI2_XFER  0x23u
 #define CMD_BOOTLOADER 0x7Fu
 
 static uint8_t g_fb_curr[EPD_FB_SIZE];
@@ -175,6 +180,56 @@ static void handle_packet(const uint8_t rx[64]) {
         send_reply(cmd, 0, out, (uint8_t)(1u + n * 4u));
         break;
     }
+    case CMD_ACCEL: {
+        int16_t x = 0, y = 0, z = 0;
+        uint8_t pl = 0;
+        int rc = mma8452_read(&x, &y, &z, &pl);
+        out[0] = (uint8_t)(x & 0xFF); out[1] = (uint8_t)((x >> 8) & 0xFF);
+        out[2] = (uint8_t)(y & 0xFF); out[3] = (uint8_t)((y >> 8) & 0xFF);
+        out[4] = (uint8_t)(z & 0xFF); out[5] = (uint8_t)((z >> 8) & 0xFF);
+        out[6] = pl;
+        send_reply(cmd, rc == 0 ? 0u : 0x04u, out, 7);
+        break;
+    }
+    case CMD_I2C_XFER: {
+        /* rx: [addr, tx_len, rx_len, wait_ms, tx_bytes...] */
+        uint8_t addr    = rx[2];
+        uint8_t tx_len  = rx[3];
+        uint8_t rx_len  = rx[4];
+        uint8_t wait_ms = rx[5];
+        if (tx_len > 54u || rx_len > 58u) { send_reply(cmd, 0x02u, 0, 0); break; }
+        int rc = i2c1_xfer(addr, rx + 6, tx_len, out, rx_len, wait_ms);
+        send_reply(cmd, rc == 0 ? 0u : (uint8_t)(-rc), out, rx_len);
+        break;
+    }
+    case CMD_GPIO_CTRL: {
+        /* rx: [port(0=A,1=B,2=C), pin(0..15), mode(0..15), val(0/1), wait_ms]
+         * returns GPIOA/B/C IDR before & after (6 x u16 = 12B) */
+        GPIO_TypeDef *ports[3] = { GPIOA, GPIOB, GPIOC };
+        uint8_t port = rx[2], pin = rx[3], mode = rx[4], val = rx[5], wms = rx[6];
+        if (port >= 3u || pin >= 16u) { send_reply(cmd, 0x02u, 0, 0); break; }
+        uint16_t bA = (uint16_t)GPIOA->IDR, bB = (uint16_t)GPIOB->IDR, bC = (uint16_t)GPIOC->IDR;
+        gpio_config(ports[port], pin, mode & 0x0Fu);
+        if (val) gpio_set(ports[port], pin); else gpio_clear(ports[port], pin);
+        if (wms) delay_ms(wms);
+        uint16_t aA = (uint16_t)GPIOA->IDR, aB = (uint16_t)GPIOB->IDR, aC = (uint16_t)GPIOC->IDR;
+        uint16_t vals[6] = { bA, bB, bC, aA, aB, aC };
+        for (int i = 0; i < 6; i++) {
+            out[i * 2]     = (uint8_t)(vals[i] & 0xFFu);
+            out[i * 2 + 1] = (uint8_t)(vals[i] >> 8);
+        }
+        send_reply(cmd, 0, out, 12);
+        break;
+    }
+    case CMD_SPI2_XFER: {
+        /* rx: [cs_port_pin, spi_mode, br_div, len(<=54), tx_bytes...] */
+        uint8_t cs = rx[2], mode = rx[3], br = rx[4], len = rx[5];
+        if (len > 54u) { send_reply(cmd, 0x02u, 0, 0); break; }
+        spi2_init(mode, br);
+        spi2_xfer_buf(cs, rx + 6, out, len);
+        send_reply(cmd, 0, out, len);
+        break;
+    }
     case CMD_BOOTLOADER: {
         send_reply(cmd, 0, 0, 0);
         delay_ms(50);
@@ -193,6 +248,7 @@ int main(void) {
     gpio_config(GPIOA, 9, GPIO_MODE_IN_FLOAT);
 
     epd_init_pins();
+    mma8452_init();
     usb_hid_init();
 
     /* Short friendly startup chirp (2200 Hz, 40 ms) so user knows custom fw booted! */
