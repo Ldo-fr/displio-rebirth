@@ -288,9 +288,10 @@ int cc3000_init(void) {
     put_u32le(mask, 0x00000200u); /* mask KEEPALIVE only */
     cc_cmd(OP_WLAN_SET_EVENT_MASK, mask, 4, 1000u);
 
-    /* Disable auto-connect to old stored profiles */
+    /* Enable fast_connect=1 so CC3000 immediately re-associates on brief AP deauths */
     uint8_t pol[12];
     for (int i = 0; i < 12; i++) pol[i] = 0;
+    put_u32le(pol + 4, 1u); /* fast_connect = 1 */
     cc_cmd(OP_WLAN_SET_CONN_POLICY, pol, 12, 1000u);
 
     /* Enable DHCP */

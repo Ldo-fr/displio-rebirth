@@ -345,7 +345,6 @@ int main(void) {
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
     uint32_t ping_pause_until = 0;
-    uint8_t  ping_pending = 0;
     g_conn_start_ms = g_ms;
     for (;;) {
         if (usb_hid_rx_ready()) {
@@ -358,7 +357,6 @@ int main(void) {
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
             last_wd_ms = g_ms;
             g_cc.ping_fail_cnt = 0;
-            ping_pending = 0;
             if (!g_wifi_ui_shown) {
                 g_wifi_ui_shown = 1;
                 ui_draw_wifi_ok(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg.ssid, g_cc.ip);
@@ -371,22 +369,27 @@ int main(void) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
         }
-        /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) + non-overlapping gateway ping */
+        /* If associated (CC_STATE_CONNECTED) for >4s without EV_UNSOL_DHCP, query IPCONFIG directly */
+        if (g_cc.state == CC_STATE_CONNECTED && (uint32_t)(g_ms - g_conn_start_ms) >= 4000u &&
+            (uint32_t)(g_ms - last_http_ms) >= 1000u) {
+            last_http_ms = g_ms;
+            if (cc3000_get_ipconfig() == 0 && g_cc.ip[0] != 0u) {
+                g_cc.state = CC_STATE_DHCP_OK;
+            }
+        }
+        /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) */
         if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 60000u) {
             last_wd_ms = g_ms;
-            if (ping_pending && !g_cc.ping_ok) {
-                g_cc.ping_fail_cnt++;
-            }
             int st = cc3000_wlan_status();
             g_cc.last_wlan_st = (int8_t)st;
-            if (st != 3 || g_cc.ping_fail_cnt >= 3u) {
-                g_cc.state = CC_STATE_ERROR;
-                g_cc.listen_sd = -1;
+            if (st != 3) {
+                if (++g_cc.ping_fail_cnt >= 2u) {
+                    g_cc.state = CC_STATE_ERROR;
+                    g_cc.listen_sd = -1;
+                }
             } else {
-                cc3000_ping_gw();
-                ping_pending = 1;
-                /* Pause OP_ACCEPT for 1.5s while CC3000 processes the 1s gateway ping */
-                ping_pause_until = g_ms + 1500u;
+                g_cc.ping_fail_cnt = 0u;
+                ping_pause_until = g_ms;
             }
         }
         /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
@@ -406,7 +409,6 @@ int main(void) {
             }
             g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
             g_conn_start_ms = g_ms;
-            ping_pending = 0;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
