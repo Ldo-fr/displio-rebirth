@@ -174,42 +174,36 @@ static void epd_fill_stage(uint8_t pixel_byte, uint32_t stage_ms) {
     } while ((uint32_t)(g_ms - t0) < stage_ms);
 }
 
-/* Encode 1-bpp framebuffer row (33 bytes = 264 px, MSB first) into G2 2-bit-per-pixel even/odd arrays.
- * stage: 0=compensate, 1=white, 2=inverse, 3=normal
- * Pixel encoding (2 bits): 00=nothing, 10=white, 11=black
- */
+static uint8_t epd_encode_even(uint8_t b, uint8_t stage) {
+    uint8_t p = b & 0x55u;
+    if (stage == 0u)      return (uint8_t)((p ^ 0x55u) | 0xAAu);              /* compensate */
+    else if (stage == 1u) return (uint8_t)((p ^ 0x55u) + 0x55u);              /* white */
+    else if (stage == 2u) return (uint8_t)((((p ^ 0x55u) << 1) | 0x55u));     /* inverse */
+    else                  return (uint8_t)(p | 0xAAu);                        /* normal */
+}
+
+static uint8_t epd_encode_odd(uint8_t b, uint8_t stage) {
+    uint8_t p = b & 0xAAu;
+    uint8_t r;
+    if (stage == 0u)      r = (uint8_t)(((p ^ 0xAAu) >> 1) | 0xAAu);          /* compensate */
+    else if (stage == 1u) r = (uint8_t)(((p ^ 0xAAu) >> 1) + 0x55u);          /* white */
+    else if (stage == 2u) r = (uint8_t)((p ^ 0xAAu) | 0x55u);                 /* inverse */
+    else                  r = (uint8_t)((p >> 1) | 0xAAu);                    /* normal */
+    /* Reverse the four 2-bit pixel pairs inside the byte (G2 odd-side scan order) */
+    return (uint8_t)(((r & 0x03u) << 6) | ((r & 0x0Cu) << 2) |
+                     ((r & 0x30u) >> 2) | ((r & 0xC0u) >> 6));
+}
+
+/* Match Displio bootloader 0x08002180 bit-for-bit */
 static void epd_frame_stage(const uint8_t *fb, uint8_t stage, uint32_t stage_ms) {
     uint8_t even[33], odd[33];
     uint32_t t0 = g_ms;
     do {
         for (uint8_t y = 0; y < EPD_HEIGHT; y++) {
-            const uint8_t *row = fb + (uint32_t)y * 33u;
+            const uint8_t *row = fb + (uint32_t)(EPD_HEIGHT - 1u - y) * 33u;
             for (int x = 0; x < 33; x++) {
-                uint8_t b = row[32 - x]; /* reverse byte order for G2 even/odd scan */
-                uint8_t e = 0, o = 0;
-                /* Even pixels (bits 7,5,3,1) -> e, Odd pixels (bits 6,4,2,0) -> o */
-                for (int k = 0; k < 4; k++) {
-                    uint8_t pe = (b >> (7 - k * 2)) & 1u;
-                    uint8_t po = (b >> (6 - k * 2)) & 1u;
-                    uint8_t ce, co;
-                    if (stage == 0u) {        /* compensate: black->white, white->nothing */
-                        ce = pe ? 0x2u : 0x0u;
-                        co = po ? 0x2u : 0x0u;
-                    } else if (stage == 1u) { /* white: white->nothing, black->white */
-                        ce = pe ? 0x0u : 0x2u;
-                        co = po ? 0x0u : 0x2u;
-                    } else if (stage == 2u) { /* inverse: black->white, white->black */
-                        ce = pe ? 0x2u : 0x3u;
-                        co = po ? 0x2u : 0x3u;
-                    } else {                  /* normal: black->black, white->white */
-                        ce = pe ? 0x3u : 0x2u;
-                        co = po ? 0x3u : 0x2u;
-                    }
-                    e = (uint8_t)((e << 2) | ce);
-                    o = (uint8_t)((o << 2) | co);
-                }
-                even[x] = e;
-                odd[32 - x] = o;
+                even[x] = epd_encode_even(row[32 - x], stage);
+                odd[x]  = epd_encode_odd(row[x], stage);
             }
             epd_send_line(y, even, odd, 0x00);
         }
