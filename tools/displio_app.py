@@ -27,6 +27,11 @@ CMD_ACCEL = 0x20
 CMD_I2C_XFER = 0x21
 CMD_GPIO_CTRL = 0x22
 CMD_SPI2_XFER = 0x23
+CMD_WIFI_SSID = 0x30
+CMD_WIFI_PASS = 0x31
+CMD_WIFI_STAT = 0x32
+CMD_WIFI_CONN = 0x33
+CMD_WIFI_OFF = 0x34
 CMD_BOOTLOADER = 0x7F
 
 EPD_W, EPD_H = 264, 176
@@ -133,6 +138,35 @@ class DisplioApp:
         d = self.cmd(CMD_SPI2_XFER, struct.pack("<BBBB", cs_pp, mode, br_div, len(tx)) + tx)
         return d[:len(tx)]
 
+    def wifi_setup(self, ssid: str, password: str, sec: int = 3, port: int = 80):
+        sb = ssid.encode("utf-8")[:32]
+        pb = password.encode("utf-8")[:64]
+        self.cmd(CMD_WIFI_SSID, struct.pack("<BHB", sec, port, len(sb)) + sb)
+        if len(pb) <= 56:
+            self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 0, len(pb), 1) + pb, timeout=2.0)
+        else:
+            self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 0, 56, 0) + pb[:56])
+            self.cmd(CMD_WIFI_PASS, struct.pack("<BBB", 1, len(pb) - 56, 1) + pb[56:], timeout=2.0)
+        self.cmd(CMD_WIFI_CONN, timeout=6.0)
+
+    def wifi_status(self) -> dict:
+        d = self.cmd(CMD_WIFI_STAT, timeout=2.0)
+        states = ["OFF", "INIT", "CONNECTING", "CONNECTED", "DHCP_OK", "ERROR"]
+        st = states[d[0]] if d[0] < len(states) else f"0x{d[0]:02x}"
+        return {
+            "state": st,
+            "sec": d[1],
+            "ip": ".".join(str(b) for b in d[2:6]),
+            "mac": ":".join(f"{b:02x}" for b in d[6:12]),
+            "sp_ver": f"{d[12]}.{d[13]}",
+            "port": struct.unpack_from("<H", d, 14)[0],
+            "http_listening": bool(d[16]),
+            "ssid": d[17:49].split(b"\x00", 1)[0].decode("utf-8", errors="replace"),
+        }
+
+    def wifi_off(self):
+        self.cmd(CMD_WIFI_OFF)
+
 
 def make_test_pattern() -> bytearray:
     """Generate a crisp 264x176 1-bpp test card with border, checkerboard, and 'DISPLIO REBIRTH' banner."""
@@ -223,6 +257,13 @@ def main(argv=None) -> int:
     sub.add_parser("scan", help="run I2C, GPIO, ADC, and SPI2 bus scans")
     sub.add_parser("sensors", help="read MMA8452Q accelerometer, Si7021 temp/RH, and battery voltage")
     sub.add_parser("wifi-info", help="boot TI CC3000 over SPI2 and read Service Pack version")
+    ws = sub.add_parser("wifi-setup", help="save Wi-Fi credentials to Flash and connect")
+    ws.add_argument("ssid")
+    ws.add_argument("password")
+    ws.add_argument("--sec", choices=["open", "wep", "wpa", "wpa2"], default="wpa2")
+    ws.add_argument("--port", type=int, default=80)
+    sub.add_parser("wifi-status", help="show CC3000 Wi-Fi & HTTP server status")
+    sub.add_parser("wifi-off", help="power off CC3000 Wi-Fi module")
     sub.add_parser("wifi-probe", help="probe candidate Wi-Fi power/reset/IRQ pins and SPI2")
     sub.add_parser("bootloader", help="reboot cleanly back into the USB HID bootloader")
 
@@ -360,6 +401,23 @@ def main(argv=None) -> int:
                 else:
                     print(f"  READ_SP_VERSION   : {pay.hex() if pay else 'timeout'}")
                 app.gpio_ctrl(1, 12, 0x03, 0, wait_ms=10)
+            elif a.cmd == "wifi-setup":
+                sec_map = {"open": 0, "wep": 1, "wpa": 2, "wpa2": 3}
+                print(f"saving Wi-Fi '{a.ssid}' (sec={a.sec}, port={a.port}) and connecting...")
+                app.wifi_setup(a.ssid, a.password, sec=sec_map[a.sec], port=a.port)
+                for _ in range(25):
+                    st = app.wifi_status()
+                    if st["http_listening"]:
+                        break
+                    time.sleep(0.5)
+                for k, v in st.items():
+                    print(f"  {k:15s}: {v}")
+            elif a.cmd == "wifi-status":
+                for k, v in app.wifi_status().items():
+                    print(f"  {k:15s}: {v}")
+            elif a.cmd == "wifi-off":
+                app.wifi_off()
+                print("Wi-Fi powered off")
             elif a.cmd == "wifi-probe":
                 print("=== Probing candidate power/enable/reset pins ===")
                 # Candidate pins: (port 0=A,1=B,2=C, pin, name)

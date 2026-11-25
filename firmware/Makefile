@@ -4,11 +4,11 @@ SIZE    = arm-none-eabi-size
 CFLAGS  = -mcpu=cortex-m3 -mthumb -Os -ffreestanding -nostdlib -Wall -Wextra \
           -ffunction-sections -fdata-sections -fno-common
 BUILD   = ../build/firmware
-SRCS    = startup.c usb_hid.c epd.c bus_scan.c sensors.c main.c
+SRCS    = startup.c usb_hid.c epd.c bus_scan.c sensors.c cc3000.c wifi_cfg.c http_api.c main.c
 
 all: $(BUILD)/displio-fw.bin
 
-$(BUILD)/displio-fw.elf: $(SRCS) stm32f103.h usb_hid.h epd.h bus_scan.h sensors.h link.ld
+$(BUILD)/displio-fw.elf: $(SRCS) stm32f103.h usb_hid.h epd.h bus_scan.h sensors.h cc3000.h wifi_cfg.h http_api.h link.ld
 	mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -T link.ld -Wl,--gc-sections -Wl,-Map=$(BUILD)/displio-fw.map -o $@ $(SRCS)
 
