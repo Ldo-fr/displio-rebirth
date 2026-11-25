@@ -126,6 +126,7 @@ void scan_gpio_adc(uint16_t gpio_idr[3], uint16_t adc_vals[11]) {
     ADC1->CR2 |= (1u << 2); /* CAL */
     while (ADC1->CR2 & (1u << 2)) {}
 
+    (void)adc1_read_ch(0u); /* discard first post-calibration conversion */
     for (uint8_t ch = 0; ch < 10u; ch++) adc_vals[ch] = adc1_read_ch(ch);
     adc_vals[10] = adc1_read_ch(17u); /* Vrefint (~1.20V) */
 }

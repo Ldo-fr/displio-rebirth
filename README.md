@@ -11,8 +11,9 @@ Original from : https://www.kickstarter.com/projects/914874115/displio-wifi-disp
 - [x] Host tool: info / read / dump / erase / write / flash (CRC-32 + validate + boot) — `tools/displio_tool.py`
 - [x] Boot hand-off (`0x06` STM32 CRC-32 at `0x0801FFFC`) and recovery (`BKP_DR1` + hold button `PA2` 1.5s on USB plug)
 - [x] Hardware discovery: **STM32F103xB** (72 MHz, 128 KiB Flash, 20 KiB RAM), Pervasive Displays 2.7" G2 E-Ink pinout, buzzer, button, USB pull-up — see [docs/hardware.md](docs/hardware.md)
-- [x] Custom firmware (`firmware/`): USB HID (`DISPLIO REBIRTH`), Pervasive Displays 2.7" E-Ink driver, piezo buzzer, I2C/GPIO/ADC/SPI2 bus scanner, hands-free bootloader return (`BKP_DR1`)
-- [ ] Accelerometer (`MMA8452Q`), I2C `0x40` sensor, Wi-Fi module bring-up & local server
+- [x] Custom firmware (`firmware/`): USB HID (`DISPLIO REBIRTH`), Pervasive Displays 2.7" E-Ink driver, piezo buzzer, hands-free bootloader return (`BKP_DR1`)
+- [x] Full peripheral discovery & drivers: `MMA8452Q` accelerometer (`I2C1 0x1C`), `Si7021` temp/humidity (`I2C1 0x40`), Battery ADC (`PC13` → `PA0`), and **TI `CC3000` Wi-Fi** (`SPI2`, `PB12=EN`, `PB4=CS`, `PA8=IRQ`)
+- [ ] CC3000 Wi-Fi driver (STA connect + TCP/HTTP API) & companion Home Assistant HACS integration (`displio-rebirth-ha`)
 
 ## Building & Flashing Custom Firmware
 

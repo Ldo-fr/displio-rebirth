@@ -30,10 +30,11 @@ Extracted 100% over USB via the Phase 2 hardware probe (`probe/probe.c`) and dis
   - Hold the single physical button (**`PA2`**) while plugging in USB (**`PA9`** = VBUS) for **1.45 seconds** (`1450 ms`).
   - The bootloader beeps twice, flashes its splash screen on the E-Ink display, and stays in USB HID bootloader mode regardless of the application flash contents.
 
-## Confirmed Pinout (from Bootloader)
+## Confirmed Pinout
 
 | Pin | Direction / AF | Function | Notes |
 |---|---|---|---|
+| `PA0` | Analog (`ADC1_IN0`) | **VBAT_ADC** | Battery voltage divider output (~2.31 V when charging; gated by `PC13`) |
 | `PA1` | Output PP | Power / System latch | Set LOW at boot, HIGH after 50 ms, LOW on USB reset |
 | `PA2` | Input floating | **User Button** | Active HIGH (`1` = pressed) |
 | `PA3` | Output PP | **EPD_BORDER** | Pervasive Displays 2.7" G2 border control |
@@ -41,35 +42,26 @@ Extracted 100% over USB via the Phase 2 hardware probe (`probe/probe.c`) and dis
 | `PA5` | AF PP (`SPI1_SCK`) | **EPD_SCK** | SPI1 clock |
 | `PA6` | Input floating (`SPI1_MISO`) | **EPD_MISO** | SPI1 MISO |
 | `PA7` | AF PP (`SPI1_MOSI`) | **EPD_MOSI** | SPI1 MOSI |
+| `PA8` | Input floating | **WIFI_IRQ** | TI CC3000 `SPI_IRQ` (active LOW) |
 | `PA9` | Input floating | **USB VBUS Sense** | `1` = USB cable plugged |
 | `PA10` | Output PP | **USB D+ Pull-Up** | Active LOW (`0` = USB connected, `1` = disconnected) |
 | `PA11` / `PA12` | USB | **USB D- / D+** | STM32 USB Full-Speed device |
 | `PB0` | AF PP (`TIM3_CH3`) | **Piezo Buzzer** | PWM ~2730 Hz (`PSC=9, ARR=2637, CCR3=1318`); LOW PP when off |
 | `PB1` | Output PP | **EPD_PANEL_ON** | Active LOW (P-MOSFET power switch for E-Ink panel) |
 | `PB2` | Output PP | **EPD_RESET** | Active LOW reset for E-Ink COG |
-| `PB6` / `PB7` | I2C1 (`SCL`/`SDA`) | **I2C1 Bus** | External pull-ups present; hosts `0x1C` (`MMA8452Q`) and `0x40` |
+| `PB4` | Output PP | **WIFI_CS** | TI CC3000 SPI chip select (active LOW) |
+| `PB6` / `PB7` | I2C1 (`SCL`/`SDA`) | **I2C1 Bus** | External pull-ups; hosts `0x1C` (`MMA8452Q`) and `0x40` (`Si7021`) |
 | `PB10` | Input floating | **EPD_BUSY** | `1` = E-Ink controller busy |
 | `PB11` | Output PP | **EPD_CS** | Active LOW SPI chip select for E-Ink |
-| `PB12` | Output PP | Unknown (reset LOW at boot) | Candidate: Wi-Fi / SPI2 CS |
-| `PC13` | Output PP | Unknown (configured PP at boot) | Candidate: LED / Wi-Fi / Power |
+| `PB12` | Output PP | **WIFI_EN** | TI CC3000 `VBAT_SW_EN` (active HIGH; held LOW by bootloader) |
+| `PB13` / `PB14` / `PB15` | `SPI2` (`SCK`/`MISO`/`MOSI`) | **WIFI_SPI** | TI CC3000 SPI bus (SPI Mode 1: `CPOL=0, CPHA=1`) |
+| `PC13` | Output PP | **BAT_MEAS_EN** | Active HIGH: enables resistor divider feeding `PA0` (`ADC1_IN0`) |
 
-## Confirmed I2C1 Devices (`PB6 = SCL`, `PB7 = SDA`)
+## Confirmed Peripherals (100% Verified Live)
 
-Discovered by the Phase 3 bus scanner (`tools/displio_app.py scan`):
-- **`0x1C`** (`reg 0x0D = 0x2A`): **NXP/Freescale `MMA8452Q`** 3-axis accelerometer (orientation, tap, shake).
-- **`0x40`**: Temperature/humidity or power-monitor IC (likely `Si7021`/`HTU21D`/`SHT21` for E-Ink temperature compensation or `INA219` — register probe in Phase 4).
-
-## Analog / Power
-
-- **`VDDA`**: ~**2.96 V** (measured via internal `Vrefint` = `1662` on 12-bit ADC1).
-
-## E-Ink Display
-
-- **Panel**: Pervasive Displays **2.7" monochrome E-Ink** (`264 × 176` pixels = `5808` bytes 1-bpp framebuffer) with **G2 COG driver** (`0x70` register index, `0x72` data write, `0x73` data read, `0x71` COG ID read).
-- **Custom driver (`firmware/epd.c`)**: Verified on hardware — 5808-byte framebuffer uploads in ~0.21 s over USB HID and refreshes cleanly in ~3.3 s.
-
-## Still to Discover (Phase 4)
-
-- Exact IC at I2C `0x40` (`Si7021`/`HTU21D` vs `INA219`/`HDC1080`).
-- **Wi-Fi module** interface (likely `USART1`/`USART2`/`USART3` or `SPI2` after enabling its power rail / reset pin such as `PB12` or `PC13`).
-- **Battery ADC** channel (possibly gated by a power-enable pin).
+- **Accelerometer (`I2C1 0x1C`)**: **NXP/Freescale `MMA8452Q`** (`WHO_AM_I` reg `0x0D` = `0x2A`) — 3-axis acceleration (mg) + portrait/landscape orientation detection.
+- **Temperature & Humidity (`I2C1 0x40`)**: **Silicon Labs `Si7021`** (User Reg `0xE7` = `0x3A`, FW rev `0x84B8` = `0x20` = v2.0) — high-accuracy ambient temperature (°C) and relative humidity (%).
+- **Wi-Fi Module (`SPI2`)**: **Texas Instruments `CC3000`** (`EN=PB12`, `CS=PB4`, `IRQ=PA8`, `SPI2` Mode 1) — verified `HCI_CMND_SIMPLE_LINK_START` (`0x4000`) → `HCI_EVNT_SIMPLE_LINK_START` (`04 00 40 01 00`).
+- **Battery / Power**: **`VDDA ≈ 2.96 V`** (via internal `Vrefint`), **`VBAT`** via `PC13` enable → `PA0` (`ADC1_IN0`, ~2.31 V divided on USB charge).
+- **E-Ink Display (`SPI1`)**: **Pervasive Displays 2.7" monochrome E-Ink** (`264 × 176`, 5808 B 1-bpp framebuffer, G2 COG driver) — verified crisp & readable.
+- **Audio**: **Piezo Buzzer** on `PB0` (`TIM3_CH3`).
