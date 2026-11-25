@@ -344,7 +344,6 @@ int main(void) {
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
-    uint32_t ping_pause_until = 0;
     g_conn_start_ms = g_ms;
     for (;;) {
         if (usb_hid_rx_ready()) {
@@ -363,19 +362,9 @@ int main(void) {
             }
         }
         /* Poll HTTP accept at 4 Hz (250 ms) — plenty fast for REST, keeps CC3000 CPU free for ICMP/ARP */
-        if (g_cc.state == CC_STATE_DHCP_OK &&
-            (int32_t)(g_ms - ping_pause_until) >= 0 &&
-            (uint32_t)(g_ms - last_http_ms) >= 250u) {
+        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 250u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
-        }
-        /* If associated (CC_STATE_CONNECTED) for >4s without EV_UNSOL_DHCP, query IPCONFIG directly */
-        if (g_cc.state == CC_STATE_CONNECTED && (uint32_t)(g_ms - g_conn_start_ms) >= 4000u &&
-            (uint32_t)(g_ms - last_http_ms) >= 1000u) {
-            last_http_ms = g_ms;
-            if (cc3000_get_ipconfig() == 0 && g_cc.ip[0] != 0u) {
-                g_cc.state = CC_STATE_DHCP_OK;
-            }
         }
         /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) */
         if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 60000u) {
@@ -389,13 +378,12 @@ int main(void) {
                 }
             } else {
                 g_cc.ping_fail_cnt = 0u;
-                ping_pause_until = g_ms;
             }
         }
-        /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
+        /* Stuck connecting/DHCP timeout (45s) -> force hardware power-cycle */
         if (g_wcfg_loaded &&
             (g_cc.state == CC_STATE_CONNECTING || g_cc.state == CC_STATE_CONNECTED) &&
-            (uint32_t)(g_ms - g_conn_start_ms) >= 25000u) {
+            (uint32_t)(g_ms - g_conn_start_ms) >= 45000u) {
             g_cc.state = CC_STATE_ERROR;
         }
         /* Auto-reconnect (with full hardware reset on CC_STATE_ERROR) */
