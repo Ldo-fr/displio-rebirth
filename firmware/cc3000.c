@@ -432,15 +432,19 @@ int cc3000_ping_gw(void) {
 }
 
 int32_t cc3000_tcp_accept_nb(int32_t listen_sd) {
+    static uint8_t err_cnt = 0;
     if (listen_sd < 0 || g_cc.state != CC_STATE_DHCP_OK) return -1;
     uint8_t args[4];
     put_u32le(args, (uint32_t)listen_sd);
-    if (cc_cmd(OP_ACCEPT, args, 4, 200u) != 0 || g_rx_len < 13u) {
-        /* HCI timeout / SPI hang: force full CC3000 reset */
-        g_cc.state = CC_STATE_ERROR;
-        g_cc.listen_sd = -1;
+    if (cc_cmd(OP_ACCEPT, args, 4, 1000u) != 0 || g_rx_len < 13u) {
+        if (++err_cnt >= 5u) {
+            err_cnt = 0;
+            g_cc.state = CC_STATE_ERROR;
+            g_cc.listen_sd = -1;
+        }
         return -1;
     }
+    err_cnt = 0;
     int32_t csd = (int32_t)get_u32le(g_rx + 9);
     if (csd >= 0) return csd;
     if (csd != -2) {

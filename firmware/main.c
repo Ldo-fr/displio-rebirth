@@ -337,7 +337,6 @@ int main(void) {
     uint32_t last_reconn_ms = 0;
     uint32_t last_wd_ms = 0;
     g_conn_start_ms = g_ms;
-    uint8_t ping_sent = 0;
     for (;;) {
         if (usb_hid_rx_ready()) {
             usb_hid_read(rx);
@@ -348,27 +347,24 @@ int main(void) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
             last_wd_ms = g_ms;
-            ping_sent = 0;
             g_cc.ping_fail_cnt = 0;
         }
         if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
         }
-        /* Wi-Fi health watchdog every 30s: check WLAN status + ping gateway to keep AP/ARP alive */
+        /* Wi-Fi health watchdog every 30s: verify WLAN_STATUS_CONNECTED (3) */
         if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 30000u) {
             last_wd_ms = g_ms;
-            if (ping_sent && !g_cc.ping_ok) {
-                g_cc.ping_fail_cnt++;
-            }
             int st = cc3000_wlan_status();
             g_cc.last_wlan_st = (int8_t)st;
             if (st != 3) {
-                g_cc.state = CC_STATE_ERROR;
-                g_cc.listen_sd = -1;
+                if (++g_cc.ping_fail_cnt >= 2u) {
+                    g_cc.state = CC_STATE_ERROR;
+                    g_cc.listen_sd = -1;
+                }
             } else {
-                cc3000_ping_gw();
-                ping_sent = 1;
+                g_cc.ping_fail_cnt = 0u;
             }
         }
         /* Stuck connecting/DHCP timeout (25s) -> force hardware power-cycle */
@@ -388,7 +384,6 @@ int main(void) {
             }
             g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
             g_conn_start_ms = g_ms;
-            ping_sent = 0;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */
