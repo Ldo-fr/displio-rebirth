@@ -71,7 +71,7 @@ static void read_si7021(int32_t *temp_c_x100, int32_t *rh_x10) {
 }
 
 static void send_http(int32_t sd, const char *status, const char *ctype, const char *body) {
-    char buf[240];
+    char buf[480];
     uint16_t blen = 0;
     while (body[blen]) blen++;
     char *p = buf;
@@ -83,7 +83,7 @@ static void send_http(int32_t sd, const char *status, const char *ctype, const c
     p = append_int(p, blen);
     p = append_str(p, "\r\nConnection: close\r\n\r\n");
     uint16_t hlen = (uint16_t)(p - buf);
-    if ((uint16_t)(hlen + blen) <= 220u) {
+    if ((uint16_t)(hlen + blen) <= 470u) {
         for (uint16_t i = 0; i < blen; i++) p[i] = body[i];
         cc3000_tcp_send(sd, (const uint8_t *)buf, (uint16_t)(hlen + blen));
     } else {
@@ -170,8 +170,10 @@ void http_api_poll(uint8_t *fb_curr, uint8_t *fb_prev, uint8_t *fb_has_prev,
     } else if (starts_with((const char *)req, "POST /beep")) {
         uint16_t freq = parse_query_u16((const char *)req, "freq=", 2400u);
         uint16_t dur  = parse_query_u16((const char *)req, "ms=", 80u);
-        if (beep_fn) beep_fn(freq, dur);
         send_http(csd, "200 OK", "application/json", "{\"ok\":true}\n");
+        cc3000_tcp_close(csd);
+        if (beep_fn) beep_fn(freq, dur);
+        return;
     } else if (starts_with((const char *)req, "POST /display")) {
         uint8_t full = (uint8_t)parse_query_u16((const char *)req, "full=", 0u);
         /* Find end of HTTP headers (\r\n\r\n) */

@@ -117,9 +117,13 @@ python3 tools/displio_app.py sensors
 
 Save your Wi-Fi credentials to Flash (`0x0801F800`) and connect immediately:
 ```bash
+# DHCP mode
 python3 tools/displio_app.py wifi-setup "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD"
+
+# Static IP mode (recommended for Home Assistant — skips CC3000 DHCP wait!)
+python3 tools/displio_app.py wifi-setup "YOUR_WIFI_SSID" "YOUR_WIFI_PASSWORD" --ip 192.168.1.42
 ```
-Optional flags: `--sec wpa2|wpa|wep|open` (default `wpa2`), `--port 80` (default `80`).
+Optional flags: `--sec wpa2|wpa|wep|open` (default `wpa2`), `--port 80` (default `80`), `--ip <IPv4>`, `--mask 255.255.255.0`, `--gw <IPv4>` (defaults to `x.y.z.1`).
 
 You should see output like:
 ```text

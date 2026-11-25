@@ -24,6 +24,7 @@
 #include "cc3000.h"
 #include "wifi_cfg.h"
 #include "http_api.h"
+#include "ui.h"
 
 #define MAGIC_REQ  0xA5u
 #define MAGIC_RESP 0x5Au
@@ -45,10 +46,13 @@
 #define CMD_WIFI_STAT  0x32u
 #define CMD_WIFI_CONN  0x33u
 #define CMD_WIFI_OFF   0x34u
+#define CMD_WIFI_IP    0x35u
 #define CMD_BOOTLOADER 0x7Fu
 
 static wifi_cfg_t g_wcfg;
 static uint8_t    g_wcfg_loaded = 0;
+static uint32_t   g_conn_start_ms = 0;
+static uint8_t    g_wifi_ui_shown = 0;
 
 static uint8_t g_fb_curr[EPD_FB_SIZE];
 static uint8_t g_fb_prev[EPD_FB_SIZE];
@@ -275,14 +279,26 @@ static void handle_packet(const uint8_t rx[64]) {
         out[15] = (uint8_t)(g_wcfg.port >> 8);
         out[16] = (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd >= 0) ? 1u : 0u;
         for (int i = 0; i < 32; i++) out[17 + i] = (uint8_t)g_wcfg.ssid[i];
-        send_reply(cmd, 0, out, 49);
+        out[49] = g_cc.gw[0]; out[50] = g_cc.gw[1]; out[51] = g_cc.gw[2]; out[52] = g_cc.gw[3];
+        out[53] = (uint8_t)g_cc.last_wlan_st;
+        out[54] = g_cc.ping_ok;
+        out[55] = g_cc.ping_fail_cnt;
+        out[56] = g_cc.reconn_cnt;
+        send_reply(cmd, 0, out, 57);
         break;
     }
     case CMD_WIFI_CONN: {
+        g_wifi_ui_shown = 0;
         int rc = cc3000_init();
         if (rc == 0 && (g_wcfg_loaded || wifi_cfg_load(&g_wcfg) == 0)) {
             g_wcfg_loaded = 1;
-            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+            /* TI CC3000 requires wlan_stop/start (re-init) for netapp_dhcp static/DHCP change to apply */
+            cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
+            rc = cc3000_init();
+            if (rc == 0) {
+                g_conn_start_ms = g_ms;
+                cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
+            }
         }
         out[0] = (uint8_t)(rc & 0xFF);
         send_reply(cmd, rc == 0 ? 0u : 0x06u, out, 1);
@@ -290,6 +306,16 @@ static void handle_packet(const uint8_t rx[64]) {
     }
     case CMD_WIFI_OFF: {
         cc3000_power_off();
+        send_reply(cmd, 0, 0, 0);
+        break;
+    }
+    case CMD_WIFI_IP: {
+        /* rx: [ip(4B), mask(4B), gw(4B)] — all zeros = DHCP */
+        for (int i = 0; i < 4; i++) {
+            g_wcfg.ip[i]   = rx[2 + i];
+            g_wcfg.mask[i] = rx[6 + i];
+            g_wcfg.gw[i]   = rx[10 + i];
+        }
         send_reply(cmd, 0, 0, 0);
         break;
     }
@@ -320,30 +346,84 @@ int main(void) {
     /* Auto-connect Wi-Fi if credentials are saved in Flash */
     if (wifi_cfg_load(&g_wcfg) == 0) {
         g_wcfg_loaded = 1;
-        if (cc3000_init() == 0) {
-            cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
-        }
+    }
+
+    /* Show boot splash + test strip (mire) on E-Ink */
+    ui_draw_boot(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg_loaded ? g_wcfg.ssid : 0);
+
+    if (g_wcfg_loaded && cc3000_init() == 0) {
+        cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
+        g_conn_start_ms = g_ms;
+        cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
     }
 
     uint8_t rx[64];
     uint32_t last_http_ms = 0;
     uint32_t last_reconn_ms = 0;
+    uint32_t last_wd_ms = 0;
+    g_conn_start_ms = g_ms;
     for (;;) {
         if (usb_hid_rx_ready()) {
             usb_hid_read(rx);
             handle_packet(rx);
         }
         cc3000_poll();
+        /* Static IP mode: as soon as WPA2 associates (CONNECTED), skip DHCP wait */
+        if (g_cc.state == CC_STATE_CONNECTED && g_wcfg.ip[0] != 0u) {
+            for (int i = 0; i < 4; i++) {
+                g_cc.ip[i]   = g_wcfg.ip[i];
+                g_cc.mask[i] = g_wcfg.mask[i];
+                g_cc.gw[i]   = g_wcfg.gw[i];
+            }
+            g_cc.state = CC_STATE_DHCP_OK;
+        }
         if (g_cc.state == CC_STATE_DHCP_OK && g_cc.listen_sd < 0) {
             cc3000_get_ipconfig();
             cc3000_tcp_listen(g_wcfg.port ? g_wcfg.port : 80u);
+            last_wd_ms = g_ms;
+            g_cc.ping_fail_cnt = 0;
+            if (!g_wifi_ui_shown) {
+                g_wifi_ui_shown = 1;
+                ui_draw_wifi_ok(g_fb_curr, g_fb_prev, &g_fb_has_prev, g_wcfg.ssid, g_cc.ip);
+            }
         }
-        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 50u) {
+        /* Poll HTTP accept at 4 Hz (250 ms) — plenty fast for REST, keeps CC3000 CPU free for ICMP/ARP */
+        if (g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_http_ms) >= 250u) {
             last_http_ms = g_ms;
             http_api_poll(g_fb_curr, g_fb_prev, &g_fb_has_prev, buzzer_beep);
         }
-        if (g_wcfg_loaded && g_cc.state == CC_STATE_INIT && (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
+        /* Wi-Fi health watchdog every 60s: check WLAN_STATUS_CONNECTED (3) */
+        if (g_wcfg_loaded && g_cc.state == CC_STATE_DHCP_OK && (uint32_t)(g_ms - last_wd_ms) >= 60000u) {
+            last_wd_ms = g_ms;
+            int st = cc3000_wlan_status();
+            g_cc.last_wlan_st = (int8_t)st;
+            if (st != 3) {
+                if (++g_cc.ping_fail_cnt >= 2u) {
+                    g_cc.state = CC_STATE_ERROR;
+                    g_cc.listen_sd = -1;
+                }
+            } else {
+                g_cc.ping_fail_cnt = 0u;
+            }
+        }
+        /* Stuck connecting/DHCP timeout (45s) -> force hardware power-cycle */
+        if (g_wcfg_loaded &&
+            (g_cc.state == CC_STATE_CONNECTING || g_cc.state == CC_STATE_CONNECTED) &&
+            (uint32_t)(g_ms - g_conn_start_ms) >= 45000u) {
+            g_cc.state = CC_STATE_ERROR;
+        }
+        /* Auto-reconnect (with full hardware reset on CC_STATE_ERROR) */
+        if (g_wcfg_loaded &&
+            (g_cc.state == CC_STATE_INIT || g_cc.state == CC_STATE_ERROR) &&
+            (uint32_t)(g_ms - last_reconn_ms) >= 5000u) {
             last_reconn_ms = g_ms;
+            uint8_t prev_reconn = g_cc.reconn_cnt;
+            if (g_cc.state == CC_STATE_ERROR) {
+                if (cc3000_init() != 0) continue;
+                cc3000_set_ip(g_wcfg.ip, g_wcfg.mask, g_wcfg.gw);
+            }
+            g_cc.reconn_cnt = (uint8_t)(prev_reconn + 1u);
+            g_conn_start_ms = g_ms;
             cc3000_connect(g_wcfg.ssid, g_wcfg.pass, g_wcfg.sec);
         }
         /* Safety: holding button PA2 for 2 seconds while running also enters bootloader */

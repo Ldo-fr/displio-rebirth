@@ -9,7 +9,12 @@ This document defines the stable local HTTP API exposed by the Displio custom fi
 Credentials are stored persistently in STM32 Flash (`0x0801F800`, 1 KiB page) and automatically used at every boot:
 
 ```sh
+# DHCP mode
 python3 tools/displio_app.py wifi-setup "<SSID>" "<PASSWORD>" --sec wpa2 --port 80
+
+# Static IP mode (recommended — skips CC3000 DHCP wait; --gw defaults to x.y.z.1)
+python3 tools/displio_app.py wifi-setup "<SSID>" "<PASSWORD>" --ip 192.168.1.42 --mask 255.255.255.0 --gw 192.168.1.1
+
 python3 tools/displio_app.py wifi-status
 ```
 
