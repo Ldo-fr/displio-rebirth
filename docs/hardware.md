@@ -64,4 +64,5 @@ Extracted 100% over USB via the Phase 2 hardware probe (`probe/probe.c`) and dis
 - **Wi-Fi Module (`SPI2`)**: **Texas Instruments `CC3000`** (`EN=PB12`, `CS=PB4`, `IRQ=PA8`, `SPI2` Mode 1) — verified `HCI_CMND_SIMPLE_LINK_START` (`0x4000`) → `HCI_EVNT_SIMPLE_LINK_START` (`04 00 40 01 00`).
 - **Battery / Power**: **`VDDA ≈ 2.96 V`** (via internal `Vrefint`), **`VBAT`** via `PC13` enable → `PA0` (`ADC1_IN0`, ~2.31 V divided on USB charge).
 - **E-Ink Display (`SPI1`)**: **Pervasive Displays 2.7" monochrome E-Ink** (`264 × 176`, 5808 B 1-bpp framebuffer, G2 COG driver) — verified crisp & readable.
+  - *Aging note*: On 10+ year-old Displio V1.0 panels, ACF/gate-line aging can couple a subset of horizontal gate lines together (showing thin horizontal ghost lines on mixed dark/light content while uniform solid/vertical-split fills remain clean, also visible on the factory bootloader splash screen). Use `python3 tools/displio_app.py epd-diag` to inspect panel health.
 - **Audio**: **Piezo Buzzer** on `PB0` (`TIM3_CH3`).
