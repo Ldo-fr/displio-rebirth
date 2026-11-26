@@ -190,6 +190,11 @@ python3 tools/displio_app.py epd-diag --pattern mire
 ```
 
 Available `--pattern` modes: `mire` (default), `black`, `white`, `split`, `bars`, and `checker`.
+
+| Expected output (healthy panel) | Observed example (aging 2015 panel with coupled gate lines) |
+|---|---|
+| ![Expected epd-diag mire](docs/images/epd-diag-expected.png) | ![Aging 2015 panel epd-diag mire](docs/images/epd-diag-aging-panel.jpg) |
+
 - If `--pattern split` is completely uniform while `--pattern mire` (and the original factory bootloader USB screen) shows extra horizontal lines across the black half at fixed Y positions, your panel has physically coupled gate lines — this is **normal hardware aging** on 2015 E-Ink glass, not a firmware or Wi-Fi bug.
 - **Practical tip**: On aging panels, **light-background / black-on-white layouts** (for example the `classic` layout in `displio-rebirth-ha`) hide these artifacts far better than large inverted black-background sections.
 
