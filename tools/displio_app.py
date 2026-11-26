@@ -259,6 +259,125 @@ def make_test_pattern() -> bytearray:
     return fb
 
 
+def make_diag_pattern(pattern: str = "mire") -> bytearray:
+    """Generate a 264x176 1-bpp E-Ink panel diagnostic test pattern.
+
+    Patterns:
+      - mire    : Full diagnostic card (left black field with white bars/stripes to expose
+                  coupled/shorted gate lines + right white field with grids & contrast blocks).
+      - black   : 100% solid black (verifies uniform fill & maximum contrast).
+      - white   : 100% solid white (clears ghosting & reveals stuck-black pixels).
+      - split   : 50% solid black left / 50% solid white right (identical on all 176 rows;
+                  isolates row-to-row gate-line coupling from horizontal source issues).
+      - bars    : Black field with 1-px white horizontal bars every 16 rows (exposes
+                  coupled gate lines across the full vertical height).
+      - checker : Full-screen 8x8 checkerboard (checks global alignment and uniformity).
+    """
+    if pattern == "black":
+        return bytearray([0xFF] * EPD_FB_SIZE)
+    if pattern == "white":
+        return bytearray([0x00] * EPD_FB_SIZE)
+    if pattern == "split":
+        row = bytes([0xFF] * 16 + [0x00] * 17)
+        return bytearray(row * EPD_H)
+
+    fb = bytearray(EPD_FB_SIZE)
+
+    def set_px(x: int, y: int, black: bool = True):
+        if 0 <= x < EPD_W and 0 <= y < EPD_H:
+            idx = y * (EPD_W // 8) + (x >> 3)
+            mask = 0x80 >> (x & 7)
+            if black:
+                fb[idx] |= mask
+            else:
+                fb[idx] &= ~mask
+
+    def fill_rect(x0: int, y0: int, x1: int, y1: int, black: bool = True):
+        for y in range(max(0, y0), min(EPD_H, y1)):
+            for x in range(max(0, x0), min(EPD_W, x1)):
+                set_px(x, y, black)
+
+    if pattern == "bars":
+        fb[:] = b"\xFF" * EPD_FB_SIZE
+        for y in range(8, EPD_H, 16):
+            fill_rect(16, y, EPD_W - 16, y + 1, black=False)
+        return fb
+
+    if pattern == "checker":
+        for y in range(EPD_H):
+            for x in range(EPD_W):
+                if ((x // 8) + (y // 8)) % 2 == 0:
+                    set_px(x, y, True)
+        return fb
+
+    # Default: "mire" — comprehensive 264x176 E-Ink panel diagnostic card
+    # Outer 1-px frame
+    fill_rect(0, 0, EPD_W, 1, True)
+    fill_rect(0, EPD_H - 1, EPD_W, EPD_H, True)
+    fill_rect(0, 0, 1, EPD_H, True)
+    fill_rect(EPD_W - 1, 0, EPD_W, EPD_H, True)
+
+    # Y-axis ruler ticks every 16 px along left & right borders
+    for y in range(0, EPD_H, 16):
+        fill_rect(1, y, 6, y + 1, True)
+        fill_rect(EPD_W - 6, y, EPD_W - 1, y + 1, True)
+
+    # Left half: solid black field (x=8..127) with targeted white probes
+    fill_rect(8, 6, 128, EPD_H - 6, True)
+    # 1) Top solid white bar (y=16..28)
+    fill_rect(24, 16, 112, 28, False)
+    # 2) Upper-mid 1-px vertical stripes (y=46..58)
+    for y in range(46, 58):
+        for x in range(24, 112, 2):
+            set_px(x, y, False)
+    # 3) Mid 5 spaced 1-px horizontal white lines (y=80..96) — prime gate-coupling probe
+    for y in (80, 84, 88, 92, 96):
+        fill_rect(24, y, 112, y + 1, False)
+    # 4) Lower solid white bar (y=136..150)
+    fill_rect(24, 136, 112, 150, False)
+
+    # Right half: white field (x=136..255)
+    # 1) Header text "EPD DIAG" (minimal 5x7 font)
+    FONT = {
+        "E": [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        "P": [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        "D": [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+        "I": [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        "A": [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        "G": [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+        " ": [0x00] * 7,
+    }
+    cx = 148
+    for ch in "EPD DIAG":
+        for ry, bits in enumerate(FONT.get(ch, FONT[" "])):
+            for rx in range(5):
+                if (bits >> (4 - rx)) & 1:
+                    fill_rect(cx + rx * 2, 14 + ry * 2, cx + rx * 2 + 2, 14 + ry * 2 + 2, True)
+        cx += 12
+    fill_rect(140, 34, 250, 36, True)
+
+    # 2) Contrast swatches: 4x4 checker (left) + 1x1 dither (right)
+    for y in range(44, 76):
+        for x in range(142, 192):
+            if (((x - 142) // 4) + ((y - 44) // 4)) % 2 == 0:
+                set_px(x, y, True)
+        for x in range(200, 250):
+            if ((x + y) & 1) == 0:
+                set_px(x, y, True)
+
+    # 3) 5 spaced 1-px horizontal black lines (y=86..102)
+    for y in (86, 90, 94, 98, 102):
+        fill_rect(142, y, 250, y + 1, True)
+
+    # 4) Vertical 1-px & 2-px resolution bars (y=114..156)
+    for x in range(142, 192, 2):
+        fill_rect(x, 114, x + 1, 156, True)
+    for x in range(200, 250, 4):
+        fill_rect(x, 114, x + 2, 156, True)
+
+    return fb
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--dev", help="hidraw device path")
@@ -272,6 +391,15 @@ def main(argv=None) -> int:
 
     et = sub.add_parser("epd-test", help="upload and display the DISPLIO REBIRTH test card")
     et.add_argument("--full", action="store_true", help="run full black/white flash clear first")
+
+    ed = sub.add_parser("epd-diag", help="display an E-Ink panel diagnostic mire to check for aging/coupled gate lines")
+    ed.add_argument(
+        "--pattern",
+        choices=["mire", "black", "white", "split", "bars", "checker"],
+        default="mire",
+        help="diagnostic pattern to render (default: mire)",
+    )
+    ed.add_argument("--no-full", action="store_true", help="skip full black/white flash clear before rendering")
 
     sub.add_parser("scan", help="run I2C, GPIO, ADC, and SPI2 bus scans")
     sub.add_parser("sensors", help="read MMA8452Q accelerometer, Si7021 temp/RH, and battery voltage")
@@ -308,6 +436,21 @@ def main(argv=None) -> int:
                 t1 = time.time()
                 app.refresh(full_clear=a.full)
                 print(f"EPD refresh complete ({time.time() - t1:.2f}s)")
+            elif a.cmd == "epd-diag":
+                fb = make_diag_pattern(a.pattern)
+                t0 = time.time()
+                app.send_fb(bytes(fb))
+                print(f"diagnostic pattern '{a.pattern}' uploaded ({len(fb)} B in {time.time() - t0:.2f}s), refreshing EPD...")
+                t1 = time.time()
+                app.refresh(full_clear=not a.no_full)
+                print(f"EPD refresh complete ({time.time() - t1:.2f}s)")
+                if a.pattern == "mire":
+                    print("Diagnostic guide:")
+                    print("  - Healthy panel : crisp black left half with 4 clean white probe zones, no extra lines.")
+                    print("  - Aging panel   : extra thin white lines appear at fixed Y rows across the black half.")
+                    print("  - Tip           : compare with '--pattern split' (uniform across all rows); if 'split'")
+                    print("                    is clean while 'mire' shows extra horizontal lines, the 2015 panel has")
+                    print("                    coupled gate lines (physical aging, not a firmware bug).")
             elif a.cmd == "scan":
                 print("=== I2C1 (PB6/PB7) ===")
                 for addr, r0f, r0d, r00 in app.scan_i2c(0):

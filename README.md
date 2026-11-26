@@ -174,6 +174,27 @@ Once your Displio is online on Wi-Fi, install the companion HACS integration **[
 
 ---
 
+## E-Ink Panel Aging & Diagnostics
+
+Displio V1.0 units ship with a **2015-era Pervasive Displays 2.7" G2 monochrome E-Ink panel** (`264 × 176`). Because these panels are now **10+ years old**, some units exhibit physical **gate-line aging** (degradation of the ACF glass bond / COG gate outputs):
+
+- **Symptoms**: Thin horizontal white/gray ghost lines appear at fixed vertical positions across high-contrast mixed areas (especially white-on-black dark banners or inverted sidebars), even though solid black/white fills or uniform vertical splits still look completely clean.
+- **How to check your panel**: Run the built-in USB diagnostic mire tool:
+
+```bash
+# 1. Uniform vertical split (all 176 rows identical — should look 100% solid)
+python3 tools/displio_app.py epd-diag --pattern split
+
+# 2. Full diagnostic mire (reveals any coupled/shorted gate lines)
+python3 tools/displio_app.py epd-diag --pattern mire
+```
+
+Available `--pattern` modes: `mire` (default), `black`, `white`, `split`, `bars`, and `checker`.
+- If `--pattern split` is completely uniform while `--pattern mire` (and the original factory bootloader USB screen) shows extra horizontal lines across the black half at fixed Y positions, your panel has physically coupled gate lines — this is **normal hardware aging** on 2015 E-Ink glass, not a firmware or Wi-Fi bug.
+- **Practical tip**: On aging panels, **light-background / black-on-white layouts** (for example the `classic` layout in `displio-rebirth-ha`) hide these artifacts far better than large inverted black-background sections.
+
+---
+
 ## Recovery / Unbricking
 
 You **cannot** brick the Displio with this project:
@@ -203,6 +224,7 @@ You **cannot** brick the Displio with this project:
 | `info` | Firmware tag, uptime, button state, USB VBUS state |
 | `beep [--freq 2400] [--ms 80]` | Sound the piezo buzzer |
 | `epd-test [--full]` | Render the built-in 264×176 test card on the E-Ink screen |
+| `epd-diag [--pattern mire\|black\|white\|split\|bars\|checker]` | Render an E-Ink panel diagnostic mire to test contrast & detect aging/coupled gate lines |
 | `sensors` | Read Si7021 temp/RH, MMA8452Q accel/orientation, and battery ADC |
 | `scan` | Scan I2C1 bus and dump GPIO/ADC telemetry |
 | `wifi-setup <ssid> <pass>` | Save Wi-Fi credentials to Flash and connect |
